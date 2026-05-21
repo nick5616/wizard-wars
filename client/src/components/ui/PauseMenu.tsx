@@ -136,7 +136,13 @@ export function PauseMenu({ ws, onClose }: PauseMenuProps) {
         zIndex: 500,
         fontFamily: "'Courier New', monospace",
       }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          onClose();
+          const canvas = document.querySelector('canvas');
+          if (canvas) setTimeout(() => { if (!document.pointerLockElement) canvas.requestPointerLock(); }, 50);
+        }
+      }}
     >
       <div style={{
         width: 540,
