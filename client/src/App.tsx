@@ -148,6 +148,20 @@ export default function App() {
     };
     window.addEventListener('keydown', onKeyDown);
 
+    // Chrome suppresses the Escape keydown when it exits pointer lock, so the
+    // keydown handler above never fires on the first press. Instead, listen for
+    // the lock-release event and open the menu directly.
+    const onPointerLockChange = () => {
+      if (!document.pointerLockElement) {
+        const p = useGameStore.getState().phase;
+        if (p === 'playing' || p === 'dead') {
+          setShowPauseMenu(true);
+          setShowSkillTree(false);
+        }
+      }
+    };
+    document.addEventListener('pointerlockchange', onPointerLockChange);
+
     // Cooldown tick
     const cdInterval = setInterval(() => {
       useGameStore.getState().tickLocalCooldowns();
@@ -163,6 +177,7 @@ export default function App() {
       offRespawned();
       wsClient.disconnect();
       window.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('pointerlockchange', onPointerLockChange);
       clearInterval(cdInterval);
     };
   }, []);

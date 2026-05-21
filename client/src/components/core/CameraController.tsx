@@ -28,7 +28,7 @@ interface Props {
 
 export function CameraController({ ws, prediction }: Props) {
   const { camera } = useThree();
-  const { movement, activeSlot } = useKeyboardControls();
+  const { movement } = useKeyboardControls();
   const { isLocked, consumeDelta, lmbRef } = useMouseControls();
   const euler = useRef(new THREE.Euler(0, 0, 0, 'YXZ'));
   const yawRef = useRef(0);
@@ -141,13 +141,13 @@ export function CameraController({ ws, prediction }: Props) {
 
       // Cast on LMB press (edge trigger)
       if (lmbDown && !lastCastRef.current) {
-        const spellId = local.equippedSpells[activeSlot];
+        const spellId = local.equippedSpells[local.activeSlot];
         if (spellId && local.isAlive) {
           const fwd = new THREE.Vector3();
           camera.getWorldDirection(fwd);
           cast = {
             spellId,
-            slotIndex: activeSlot,
+            slotIndex: local.activeSlot,
             aimDir: { x: fwd.x, y: fwd.y, z: fwd.z },
           };
         }

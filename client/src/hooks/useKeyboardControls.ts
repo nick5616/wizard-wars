@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { useGameStore } from '../stores/gameStore';
 
 export interface MovementState {
   forward: boolean;
@@ -30,9 +31,6 @@ export function useKeyboardControls() {
     jumping: false, mobility: false,
   });
 
-  const [activeSlot, setActiveSlot] = useState(0);
-  const castQueue = useRef<number[]>([]);
-
   const onKeyDown = useCallback((e: KeyboardEvent) => {
     const key = KEY_MAP[e.code];
     if (key) {
@@ -41,10 +39,12 @@ export function useKeyboardControls() {
     }
 
     // Slot selection
-    if (e.code === 'Digit1') setActiveSlot(0);
-    if (e.code === 'Digit2') setActiveSlot(1);
-    if (e.code === 'Digit3') setActiveSlot(2);
-    if (e.code === 'Digit4') setActiveSlot(3);
+    if (!useGameStore.getState().menuOpen) {
+      if (e.code === 'Digit1') useGameStore.getState().setActiveSlot(0);
+      if (e.code === 'Digit2') useGameStore.getState().setActiveSlot(1);
+      if (e.code === 'Digit3') useGameStore.getState().setActiveSlot(2);
+      if (e.code === 'Digit4') useGameStore.getState().setActiveSlot(3);
+    }
   }, []);
 
   const onKeyUp = useCallback((e: KeyboardEvent) => {
@@ -61,5 +61,5 @@ export function useKeyboardControls() {
     };
   }, [onKeyDown, onKeyUp]);
 
-  return { movement, activeSlot };
+  return { movement };
 }

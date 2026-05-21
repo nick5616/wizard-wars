@@ -4,6 +4,8 @@
   "workspaces": ["client", "server", "shared"],
   "scripts": {
     "dev": "concurrently \"npm run dev -w server\" \"npm run dev -w client\"",
+    "dev:mock": "concurrently \"node scripts/mock-server.js\" \"npm run dev -w client\"",
+    "dev:client": "npm run dev -w client",
     "start:server": "npm run start -w server",
     "start:client": "npm run dev -w client"
   },

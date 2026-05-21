@@ -29,12 +29,11 @@ export function Arena() {
   }, [activeDomain]);
 
   const floorColor = domainColor ?? '#252545';
-  const fogColor   = domainColor ?? '#0d0d1a';
 
   return (
     <>
-      {/* Fog — reduced density so players can read the space */}
-      <fogExp2 attach="fog" color={fogColor} density={0.012} />
+      {/* Ambient floor — prevents any surface from hitting pure black */}
+      <ambientLight intensity={domainColor ? 0.4 : 0.6} color={domainColor ?? '#334466'} />
 
       {/* Hemisphere light: sky above, warm ground below — gives even readable fill */}
       <hemisphereLight
@@ -47,6 +46,12 @@ export function Arena() {
         intensity={domainColor ? 1.5 : 3.5}
         color={domainColor ?? '#aabbdd'}
         castShadow
+        shadow-camera-left={-ARENA_RADIUS - 4}
+        shadow-camera-right={ARENA_RADIUS + 4}
+        shadow-camera-top={ARENA_RADIUS + 4}
+        shadow-camera-bottom={-ARENA_RADIUS - 4}
+        shadow-camera-near={1}
+        shadow-camera-far={60}
       />
 
       {/* Angled fill light to soften harsh top shadows */}
@@ -104,7 +109,12 @@ export function Arena() {
       {/* Ceiling */}
       <mesh position={[0, ARENA_WALL_HEIGHT, 0]} rotation={[Math.PI, 0, 0]}>
         <circleGeometry args={[ARENA_RADIUS, FLOOR_SEGMENTS]} />
-        <meshStandardMaterial color="#050508" side={THREE.BackSide} />
+        <meshStandardMaterial
+          color={domainColor ?? '#181828'}
+          emissive={domainColor ?? '#0a0a18'}
+          emissiveIntensity={0.8}
+          side={THREE.BackSide}
+        />
       </mesh>
 
       <Pillars count={8} radius={ARENA_RADIUS - 1.5} domainColor={domainColor} />
