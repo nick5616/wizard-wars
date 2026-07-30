@@ -1,5 +1,5 @@
 export type WizardClass = 'fire' | 'ice' | 'dark' | 'sword' | 'earth';
-export type SpellType = 'projectile' | 'beam' | 'hitscan' | 'aoe' | 'domain' | 'direct' | 'passive' | 'mobility';
+export type SpellType = 'projectile' | 'beam' | 'hitscan' | 'aoe' | 'domain' | 'direct' | 'passive' | 'mobility' | 'melee';
 
 export interface Vec3 { x: number; y: number; z: number; }
 
@@ -44,6 +44,9 @@ export interface PlayerState {
   cooldowns: Record<string, number>; // spellId → ms remaining
   activeEffects: Record<string, { expiresAt: number; stacks: number }>;
   skillPoints: number;
+  level: number;
+  xp: number;
+  divergedBranch: Record<string, string>;
   unlockedNodes: string[];
   kills: number;
   ping: number;

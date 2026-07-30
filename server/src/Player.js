@@ -13,6 +13,9 @@ export class Player {
     this.health = PLAYER_MAX_HEALTH;
     this.maxHealth = PLAYER_MAX_HEALTH;
     this.skillPoints = 0;
+    this.xp = 0;
+    this.level = 1;
+    this.divergedBranch = {}; // branchGroup -> chosen branch id
     this.unlockedNodes = new Set();
     this.oncePerLifeUsed = new Set(); // e.g. 'death_note', 'phoenix'
 
@@ -74,6 +77,7 @@ export class Player {
     this.class = className;
     this.equippedSpells = [...DEFAULT_EQUIPPED[className]];
     this.mobilitySpell = MOBILITY_SPELL[className];
+    this.divergedBranch = {};
     // Auto-unlock default spells so they can be re-equipped after unequipping
     for (const spellId of this.equippedSpells) {
       if (spellId) this.unlockedNodes.add(spellId);
@@ -180,6 +184,9 @@ export class Player {
       cooldowns: cooldownData,
       activeEffects: effects,
       skillPoints: this.skillPoints,
+      level: this.level,
+      xp: this.xp,
+      divergedBranch: { ...this.divergedBranch },
       unlockedNodes: [...this.unlockedNodes],
       kills: this.kills,
       ping: this.ping,

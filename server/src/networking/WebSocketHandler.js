@@ -1,4 +1,6 @@
 import { C2S } from 'shared/events';
+import { getNode, canUnlockNode } from 'shared/skillTrees';
+import { CLASSES } from 'shared/constants';
 
 export class WebSocketHandler {
   constructor(server) {
@@ -15,6 +17,7 @@ export class WebSocketHandler {
       case C2S.EQUIP_SPELL:    this._handleEquipSpell(player, msg); break;
       case C2S.BUY_SKILL_NODE: this._handleBuyNode(player, msg); break;
       case C2S.RESPAWN:        this._handleRespawn(player, msg); break;
+      case C2S.SKILL_VOTE_RESOLVE: this._handleVoteResolve(player, msg); break;
       case C2S.DEBUG_GRANT:    player.skillPoints += 999; break;
       default: break;
     }
@@ -35,7 +38,10 @@ export class WebSocketHandler {
     player.selectClass(msg.class);
 
     const room = player.roomId ? this.server.rooms.get(player.roomId) : null;
-    if (room) room.spawnPlayer(player);
+    if (room) {
+      room.spawnPlayer(player);
+      room.progressionSystem.tryAutoUnlock(player);
+    }
   }
 
   _handleInput(player, msg) {
@@ -55,6 +61,8 @@ export class WebSocketHandler {
       pitch: msg.pitch ?? player.pitch,
       cast: msg.cast ?? null,
       mobility: msg.mobility ?? false,
+      basicAttack: msg.basicAttack ?? null,
+      melee: msg.melee ?? null,
     });
   }
 
@@ -68,28 +76,42 @@ export class WebSocketHandler {
 
   _handleBuyNode(player, msg) {
     const { nodeId } = msg;
-    if (!nodeId || player.skillPoints <= 0) return;
-    if (player.unlockedNodes.has(nodeId)) return;
+    if (!nodeId || !player.class || player.skillPoints <= 0) return;
 
-    // TODO: validate tree prerequisites from shared skill tree definition
-    // For now, simple purchase
+    const node = getNode(player.class, nodeId);
+    if (!node) return;
+    if (!canUnlockNode(node, player.unlockedNodes)) return;
+
     player.unlockedNodes.add(nodeId);
     player.skillPoints--;
 
-    const room = player.roomId ? this.server.rooms.get(player.roomId) : null;
-    if (room) {
-      this.server.send(player, {
-        type: 's2c:skill_bought',
-        nodeId,
-        skillPoints: player.skillPoints,
-      });
-    }
+    this.server.send(player, {
+      type: 's2c:skill_bought',
+      nodeId,
+      skillPoints: player.skillPoints,
+    });
   }
 
   _handleRespawn(player, msg) {
     if (!player.roomId || player.isAlive) return;
     const room = this.server.rooms.get(player.roomId);
-    if (room) room.spawnPlayer(player);
+    if (!room) return;
+
+    if (msg?.newClass && CLASSES.includes(msg.newClass) && msg.newClass !== player.class) {
+      player.selectClass(msg.newClass);
+    } else if (msg?.switchBranch) {
+      room.progressionSystem.switchBranch(player);
+    }
+
+    room.spawnPlayer(player);
+    room.progressionSystem.tryAutoUnlock(player);
+  }
+
+  _handleVoteResolve(player, msg) {
+    const { branchGroup, choice } = msg;
+    if (!player.roomId || !branchGroup || !choice) return;
+    const room = this.server.rooms.get(player.roomId);
+    if (room) room.progressionSystem.resolveVote(player, branchGroup, choice);
   }
 }
 

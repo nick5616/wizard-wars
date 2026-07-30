@@ -2,19 +2,22 @@ import { useRef, useMemo, useEffect } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { EffectState } from '../../types/game.types';
+import { BASIC_ATTACK } from 'shared/spells';
 
 interface HitscanFlashProps {
   effect: EffectState;
 }
 
 const MAX_RANGE = 80;
+const BASIC_ATTACK_IDS = new Set<string>(Object.values(BASIC_ATTACK));
 
 export function HitscanFlash({ effect }: HitscanFlashProps) {
   const groupRef = useRef<THREE.Group>(null);
-  const line1 = useRef<THREE.Line>(null);
-  const line2 = useRef<THREE.Line>(null);
 
-  const { origin, direction, color = '#ffffff', glowColor = '#ffffff', createdAt, expiresAt } = effect;
+  const { origin, direction, color = '#ffffff', glowColor = '#ffffff', createdAt, expiresAt, spellId } = effect;
+  // The weak always-on basic attack gets a thinner, cheaper tracer -- no glow
+  // line, lower peak opacity -- so it reads as "minor" next to real spells.
+  const thin = spellId ? BASIC_ATTACK_IDS.has(spellId) : false;
 
   const { line1Obj, line2Obj } = useMemo(() => {
     if (!origin || !direction) return { line1Obj: null, line2Obj: null };
@@ -27,12 +30,12 @@ export function HitscanFlash({ effect }: HitscanFlashProps) {
       ),
     ]);
     const mat1 = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 1 });
-    const mat2 = new THREE.LineBasicMaterial({ color: glowColor, transparent: true, opacity: 0.5 });
+    const mat2 = thin ? null : new THREE.LineBasicMaterial({ color: glowColor, transparent: true, opacity: 0.5 });
     return {
       line1Obj: new THREE.Line(geo, mat1),
-      line2Obj: new THREE.Line(geo, mat2),
+      line2Obj: mat2 ? new THREE.Line(geo, mat2) : null,
     };
-  }, [origin?.x, origin?.y, origin?.z, direction?.x, direction?.y, direction?.z, color, glowColor]);
+  }, [origin?.x, origin?.y, origin?.z, direction?.x, direction?.y, direction?.z, color, glowColor, thin]);
 
   useEffect(() => () => {
     line1Obj?.geometry.dispose();
@@ -45,17 +48,18 @@ export function HitscanFlash({ effect }: HitscanFlashProps) {
     const now = Date.now();
     const total = expiresAt - createdAt;
     const life = total > 0 ? Math.max(0, (expiresAt - now) / total) : 0;
+    const peak = thin ? 0.6 : 1;
     groupRef.current.visible = life > 0;
-    if (line1Obj) (line1Obj.material as THREE.LineBasicMaterial).opacity = life;
+    if (line1Obj) (line1Obj.material as THREE.LineBasicMaterial).opacity = life * peak;
     if (line2Obj) (line2Obj.material as THREE.LineBasicMaterial).opacity = life * 0.5;
   });
 
-  if (!line1Obj || !line2Obj) return null;
+  if (!line1Obj) return null;
 
   return (
     <group ref={groupRef}>
       <primitive object={line1Obj} />
-      <primitive object={line2Obj} />
+      {line2Obj && <primitive object={line2Obj} />}
     </group>
   );
 }

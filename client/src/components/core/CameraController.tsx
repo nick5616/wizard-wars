@@ -12,14 +12,26 @@ import { useMouseControls } from '../../hooks/useMouseControls';
 import { useGameStore } from '../../stores/gameStore';
 import { useNetworkStore } from '../../stores/networkStore';
 import { ClientPrediction } from '../../networking/ClientPrediction';
-import type { Vec3 } from '../../types/game.types';
+import type { Vec3, CastInput } from '../../types/game.types';
 import { INPUT_FLAGS } from 'shared/events';
 import type { WebSocketClient } from '../../networking/WebSocketClient';
 import { C2S } from 'shared/events';
-import { PLAYER_HEIGHT } from 'shared/constants';
-import { MOBILITY_SPELL, getSpell } from 'shared/spells';
+import { PLAYER_HEIGHT, CAST_MAX_RANGE } from 'shared/constants';
+import { MOBILITY_SPELL, BASIC_ATTACK, MELEE_ATTACK, getSpell } from 'shared/spells';
+import { getTargetObjects } from '../../networking/targetRegistry';
+import { audioManager } from '../../audio/AudioManager';
 
 const MOUSE_SENSITIVITY = 0.002;
+
+/** Walk up from a raycast hit to find the registered player group and its tagged id. */
+function resolvePlayerIdFromHit(obj: THREE.Object3D | null): string | undefined {
+  let cur: THREE.Object3D | null = obj;
+  while (cur) {
+    if (cur.userData?.playerId) return cur.userData.playerId as string;
+    cur = cur.parent;
+  }
+  return undefined;
+}
 
 interface Props {
   ws: WebSocketClient;
@@ -29,7 +41,7 @@ interface Props {
 export function CameraController({ ws, prediction }: Props) {
   const { camera } = useThree();
   const { movement } = useKeyboardControls();
-  const { isLocked, consumeDelta, lmbRef } = useMouseControls();
+  const { isLocked, consumeDelta, lmbRef, rmbRef } = useMouseControls();
   const euler = useRef(new THREE.Euler(0, 0, 0, 'YXZ'));
   const yawRef = useRef(0);
   const pitchRef = useRef(0);
@@ -37,8 +49,11 @@ export function CameraController({ ws, prediction }: Props) {
   const velRef = useRef({ x: 0, y: 0, z: 0 });
   const inputTickRef = useRef(0);
   const lastCastRef = useRef(false);
+  const lastBasicAttackRef = useRef(false);
+  const raycasterRef = useRef(new THREE.Raycaster());
   const wasAliveRef = useRef(false);
   const wasShiftRef = useRef(false);
+  const wasMeleeRef = useRef(false);
 
   const { local, setLocalPosition } = useGameStore.getState();
   const { localPlayerId } = useNetworkStore.getState();
@@ -137,7 +152,7 @@ export function CameraController({ ws, prediction }: Props) {
       inputTickRef.current -= 1 / 64;
 
       const lmbDown = lmbRef.current;
-      let cast = null;
+      let cast: CastInput | null = null;
 
       // Cast on LMB press (edge trigger)
       if (lmbDown && !lastCastRef.current) {
@@ -150,9 +165,52 @@ export function CameraController({ ws, prediction }: Props) {
             slotIndex: local.activeSlot,
             aimDir: { x: fwd.x, y: fwd.y, z: fwd.z },
           };
+
+          // Direct-target spells (shatter, petrify, amaterasu, death_note) need a
+          // targetId server-side -- raycast the crosshair against known remote players.
+          const spellDef = getSpell(spellId);
+          if (spellDef?.requiresTarget) {
+            raycasterRef.current.set(camera.position, fwd);
+            raycasterRef.current.far = CAST_MAX_RANGE;
+            const hits = raycasterRef.current.intersectObjects(getTargetObjects(), true);
+            const targetId = hits.length > 0 ? resolvePlayerIdFromHit(hits[0].object) : undefined;
+            if (targetId) cast.targetId = targetId;
+          }
         }
       }
       lastCastRef.current = lmbDown;
+
+      // Basic attack on RMB press (edge trigger) -- always available, no equip needed
+      const rmbDown = rmbRef.current;
+      let basicAttack: { aimDir: Vec3 } | null = null;
+      if (rmbDown && !lastBasicAttackRef.current && local.class) {
+        const spellId = BASIC_ATTACK[local.class];
+        if (spellId && !(local.cooldowns[spellId] > 0)) {
+          const fwd = new THREE.Vector3();
+          camera.getWorldDirection(fwd);
+          basicAttack = { aimDir: { x: fwd.x, y: fwd.y, z: fwd.z } };
+          const spell = getSpell(spellId);
+          if (spell) useGameStore.getState().setLocalCooldown(spellId, spell.cooldown * 1000);
+          audioManager.playSound('hitscan_fire');
+        }
+      }
+      lastBasicAttackRef.current = rmbDown;
+
+      // Melee on F press (edge trigger)
+      const meleeFired = movement.melee && !wasMeleeRef.current;
+      wasMeleeRef.current = movement.melee;
+      let melee: { aimDir: Vec3 } | null = null;
+      if (meleeFired && local.class) {
+        const spellId = MELEE_ATTACK[local.class];
+        if (spellId && !(local.cooldowns[spellId] > 0)) {
+          const fwd = new THREE.Vector3();
+          camera.getWorldDirection(fwd);
+          melee = { aimDir: { x: fwd.x, y: fwd.y, z: fwd.z } };
+          const spell = getSpell(spellId);
+          if (spell) useGameStore.getState().setLocalCooldown(spellId, spell.cooldown * 1000);
+          audioManager.playSound('melee_swing');
+        }
+      }
 
       // Mobility: edge-trigger only on Shift press, not hold
       const mobilityFired = movement.mobility && !wasShiftRef.current;
@@ -176,6 +234,8 @@ export function CameraController({ ws, prediction }: Props) {
         pitch: pitchRef.current,
         cast,
         mobility: mobilityFired,
+        basicAttack,
+        melee,
       });
 
       prediction.store({

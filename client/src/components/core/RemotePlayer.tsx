@@ -1,9 +1,18 @@
-import { useRef } from 'react';
+import { useRef, useEffect } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { EntityInterpolation } from '../../networking/EntityInterpolation';
 import type { PlayerState } from '../../types/game.types';
 import { PLAYER_HEIGHT } from 'shared/constants';
+import { hatScaleForLevel } from 'shared/leveling';
+import { registerTarget, unregisterTarget } from '../../networking/targetRegistry';
+
+// Must mirror the private HAT_CONE_* / HAT_BASE_LOCAL_Y constants in
+// shared/leveling.js so the rendered hat lines up with where the server
+// thinks the hat hitbox is for the contact-buff check.
+const HAT_CONE_RADIUS = 0.28;
+const HAT_CONE_HEIGHT = 0.5;
+const HAT_BASE_LOCAL_Y = 1.95;
 
 const CLASS_COLORS: Record<string, string> = {
   fire: '#ff4500',
@@ -26,6 +35,12 @@ export function RemotePlayer({ playerId, interpolation, serverNow, initialState 
   const healthBarRef = useRef<THREE.Mesh>(null);
 
   const color = CLASS_COLORS[initialState.class ?? 'default'] ?? CLASS_COLORS.default;
+  const hatScale = hatScaleForLevel(initialState.level ?? 1);
+
+  useEffect(() => {
+    if (groupRef.current) registerTarget(playerId, groupRef.current);
+    return () => unregisterTarget(playerId);
+  }, [playerId]);
 
   useFrame(() => {
     const interp = interpolation.getInterpolated(playerId, serverNow());
@@ -62,6 +77,14 @@ export function RemotePlayer({ playerId, interpolation, serverNow, initialState 
         <sphereGeometry args={[0.3, 8, 8]} />
         <meshStandardMaterial color={color} roughness={0.6} metalness={0.2} />
       </mesh>
+
+      {/* Wizard hat -- grows with level, see shared/leveling.js:hatScaleForLevel */}
+      <group position={[0, HAT_BASE_LOCAL_Y, 0]} scale={[hatScale, hatScale, hatScale]}>
+        <mesh position={[0, HAT_CONE_HEIGHT / 2, 0]} castShadow>
+          <coneGeometry args={[HAT_CONE_RADIUS, HAT_CONE_HEIGHT, 12]} />
+          <meshStandardMaterial color={color} roughness={0.45} metalness={0.2} />
+        </mesh>
+      </group>
 
       {/* Class glow */}
       <pointLight position={[0, 1.5, 0]} intensity={0.5} distance={3} color={color} />

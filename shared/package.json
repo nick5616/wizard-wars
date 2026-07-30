@@ -8,6 +8,8 @@
     "./constants": "./constants.js",
     "./events": "./events.js",
     "./spells": "./spells.js",
-    "./gameConfig": "./gameConfig.js"
+    "./gameConfig": "./gameConfig.js",
+    "./skillTrees": "./skillTrees.js",
+    "./leveling": "./leveling.js"
   }
 }

@@ -8,6 +8,7 @@ export const C2S = {
   SELECT_CLASS:     'c2s:select_class',
   RESPAWN:          'c2s:respawn',
   DEBUG_GRANT:      'c2s:debug_grant',
+  SKILL_VOTE_RESOLVE: 'c2s:skill_vote_resolve',
 };
 
 // Server → Client
@@ -28,6 +29,10 @@ export const S2C = {
   DOMAIN_END:       's2c:domain_end',
   KILL_FEED:        's2c:kill_feed',
   SKILL_BOUGHT:     's2c:skill_bought',
+  LEVEL_UP:         's2c:level_up',
+  HAT_BUFF_PROC:    's2c:hat_buff_proc',
+  SKILL_AUTO_UNLOCKED: 's2c:skill_auto_unlocked',
+  SKILL_VOTE_PROMPT:   's2c:skill_vote_prompt',
   ERROR:            's2c:error',
 };
 

@@ -14,10 +14,35 @@ interface LocalPlayerState {
   mobilityCD: number;
   activeEffects: Record<string, { expiresAt: number; stacks: number }>;
   skillPoints: number;
+  level: number;
+  xp: number;
+  divergedBranch: Record<string, string>;
   unlockedNodes: string[];
   kills: number;
   isAlive: boolean;
   position: Vec3;
+}
+
+export interface VoteOption {
+  id: string;
+  label: string;
+  description: string;
+}
+
+export interface VoteState {
+  branchGroup: string;
+  options: VoteOption[];
+  expiresAt: number;
+  totalMs: number;
+}
+
+export const NOTIFICATION_TTL_MS = 4000;
+
+export interface NotificationEntry {
+  id: string;
+  text: string;
+  color: string;
+  at: number;
 }
 
 export interface DamageNumber {
@@ -46,6 +71,8 @@ interface GameState {
   // UI state
   phase: 'connecting' | 'class_select' | 'playing' | 'dead' | 'skill_tree';
   killFeed: KillFeedEntry[];
+  notifications: NotificationEntry[];
+  voteState: VoteState | null;
 
   // Set by GAME_TICK reconciliation, consumed and cleared by CameraController
   serverCorrectedPos: Vec3 | null;
@@ -61,6 +88,9 @@ interface GameState {
   setLocalCooldown: (spellId: string, ms: number) => void;
   tickLocalCooldowns: () => void;
   addKillFeedEntry: (entry: KillFeedEntry) => void;
+  pushNotification: (text: string, color?: string) => void;
+  pruneNotifications: () => void;
+  setVoteState: (v: VoteState | null) => void;
   setLocalPosition: (pos: Vec3) => void;
   setLocalAlive: (v: boolean) => void;
   addUnlockedNode: (nodeId: string) => void;
@@ -86,6 +116,9 @@ const defaultLocal: LocalPlayerState = {
   mobilityCD: 0,
   activeEffects: {},
   skillPoints: 0,
+  level: 1,
+  xp: 0,
+  divergedBranch: {},
   unlockedNodes: [],
   kills: 0,
   isAlive: false,
@@ -102,6 +135,8 @@ export const useGameStore = create<GameState>((set, get) => ({
   local: { ...defaultLocal },
   phase: 'connecting',
   killFeed: [],
+  notifications: [],
+  voteState: null,
   serverCorrectedPos: null,
   damageNumbers: [],
   menuOpen: false,
@@ -127,6 +162,9 @@ export const useGameStore = create<GameState>((set, get) => ({
         cooldowns: localPlayer.cooldowns,
         activeEffects: localPlayer.activeEffects,
         skillPoints: localPlayer.skillPoints,
+        level: localPlayer.level,
+        xp: localPlayer.xp,
+        divergedBranch: localPlayer.divergedBranch,
         unlockedNodes: localPlayer.unlockedNodes,
         kills: localPlayer.kills,
         isAlive: localPlayer.isAlive,
@@ -160,6 +198,18 @@ export const useGameStore = create<GameState>((set, get) => ({
   addKillFeedEntry: (entry) => set((s) => ({
     killFeed: [entry, ...s.killFeed].slice(0, 8),
   })),
+
+  pushNotification: (text, color = '#ccddff') => set((s) => ({
+    notifications: [{ id: `${Date.now()}-${Math.random()}`, text, color, at: Date.now() }, ...s.notifications].slice(0, 8),
+  })),
+
+  pruneNotifications: () => set((s) => {
+    const cutoff = Date.now() - NOTIFICATION_TTL_MS;
+    const next = s.notifications.filter((n) => n.at > cutoff);
+    return next.length === s.notifications.length ? s : { notifications: next };
+  }),
+
+  setVoteState: (v) => set({ voteState: v }),
 
   setLocalPosition: (pos) => set((s) => ({ local: { ...s.local, position: pos } })),
 

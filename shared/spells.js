@@ -4,7 +4,7 @@
  */
 
 // spell.type values:
-// projectile | beam | hitscan | aoe | domain | direct | passive | mobility
+// projectile | beam | hitscan | aoe | domain | direct | passive | mobility | melee
 
 const def = (d) => ({ serverAuthoritative: true, interruptible: false, windupMs: 0, statusEffect: null, statusDuration: 0, selfCost: null, requiresTarget: false, radius: 0, duration: null, speed: null, ...d });
 
@@ -365,6 +365,38 @@ export const EARTH_SPELLS = {
   }),
 };
 
+// ─── Basic attack & melee (always available, no unlock, outside the 4 equip
+// slots -- same "outside the slot system" treatment as MOBILITY_SPELL below).
+// Weak hitscan poke with a fast cooldown: the payoff for tracking an enemy
+// instead of committing to a slow, heavy spell. Melee is the up-close fallback
+// -- mostly a plain punch, since none of these classes fight barehanded for a
+// living.
+// ─────────────────────────────────────────────────────────────────────────
+
+export const BASIC_ATTACKS = {
+  fire_spark_poke:    def({ id: 'fire_spark_poke',    name: 'Spark Poke',    school: 'fire',  tier: 0, class: 'fire',  type: 'hitscan', damage: 10, cooldown: 0.2, color: '#ffcc66', glowColor: '#ff8800' }),
+  ice_frost_flick:    def({ id: 'ice_frost_flick',    name: 'Frost Flick',   school: 'ice',   tier: 0, class: 'ice',   type: 'hitscan', damage: 10, cooldown: 0.2, color: '#cceeff', glowColor: '#88ccff' }),
+  dark_void_lash:     def({ id: 'dark_void_lash',     name: 'Void Lash',     school: 'dark',  tier: 0, class: 'dark',  type: 'hitscan', damage: 10, cooldown: 0.2, color: '#aa66ff', glowColor: '#6600cc' }),
+  sword_dagger_flick: def({ id: 'sword_dagger_flick', name: 'Dagger Flick',  school: 'sword', tier: 0, class: 'sword', type: 'hitscan', damage: 10, cooldown: 0.2, color: '#dddddd', glowColor: '#ffffff' }),
+  earth_stone_chip:   def({ id: 'earth_stone_chip',   name: 'Stone Chip',    school: 'earth', tier: 0, class: 'earth', type: 'hitscan', damage: 10, cooldown: 0.2, color: '#c2a05a', glowColor: '#8B6914' }),
+};
+
+export const MELEE_ATTACKS = {
+  fire_punch:          def({ id: 'fire_punch',          name: 'Punch',           school: 'fire',  tier: 0, class: 'fire',  type: 'melee', damage: 18, cooldown: 0.6, radius: 2.2, color: '#ff6600', glowColor: '#ff8800' }),
+  ice_punch:            def({ id: 'ice_punch',            name: 'Punch',           school: 'ice',   tier: 0, class: 'ice',   type: 'melee', damage: 18, cooldown: 0.6, radius: 2.2, color: '#a0d8ff', glowColor: '#ffffff' }),
+  dark_punch:           def({ id: 'dark_punch',           name: 'Punch',           school: 'dark',  tier: 0, class: 'dark',  type: 'melee', damage: 18, cooldown: 0.6, radius: 2.2, color: '#6600cc', glowColor: '#aa00ff' }),
+  sword_pommel_strike:  def({ id: 'sword_pommel_strike',  name: 'Pommel Strike',   school: 'sword', tier: 0, class: 'sword', type: 'melee', damage: 18, cooldown: 0.6, radius: 2.2, color: '#c8c8c8', glowColor: '#ffffff' }),
+  earth_punch:          def({ id: 'earth_punch',          name: 'Punch',           school: 'earth', tier: 0, class: 'earth', type: 'melee', damage: 18, cooldown: 0.6, radius: 2.2, color: '#8B6914', glowColor: '#a08030' }),
+};
+
+export const BASIC_ATTACK = {
+  fire: 'fire_spark_poke', ice: 'ice_frost_flick', dark: 'dark_void_lash', sword: 'sword_dagger_flick', earth: 'earth_stone_chip',
+};
+
+export const MELEE_ATTACK = {
+  fire: 'fire_punch', ice: 'ice_punch', dark: 'dark_punch', sword: 'sword_pommel_strike', earth: 'earth_punch',
+};
+
 // ─── All spells flat map ────────────────────────────────────────────────────
 
 export const ALL_SPELLS = {
@@ -373,6 +405,8 @@ export const ALL_SPELLS = {
   ...DARK_SPELLS,
   ...SWORD_SPELLS,
   ...EARTH_SPELLS,
+  ...BASIC_ATTACKS,
+  ...MELEE_ATTACKS,
 };
 
 export const getSpell = (id) => ALL_SPELLS[id] ?? null;

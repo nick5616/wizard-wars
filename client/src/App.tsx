@@ -15,10 +15,28 @@ import { HUD } from './components/ui/HUD';
 import { ClassSelect } from './components/ui/ClassSelect';
 import { SkillTree } from './components/ui/SkillTree';
 import { PauseMenu } from './components/ui/PauseMenu';
+import { NotificationFeed } from './components/ui/NotificationFeed';
+import { SkillVotePrompt } from './components/ui/SkillVotePrompt';
+import { DeathScreen } from './components/ui/DeathScreen';
+import { audioManager } from './audio/AudioManager';
+import { getSpell } from 'shared/spells';
 import { S2C, C2S } from 'shared/events';
+import { RANKS } from 'shared/leveling';
 import type { GameTickPayload, WizardClass } from './types/game.types';
 
 const WS_URL = import.meta.env.VITE_WS_URL ?? 'ws://localhost:8080';
+
+const DENY_REASON_TEXT: Record<string, string> = {
+  not_equipped: 'Spell not equipped',
+  unknown_spell: 'Unknown spell',
+  not_alive: "Can't cast while dead",
+  wrong_class: 'Wrong class for that spell',
+  on_cooldown: 'Still on cooldown',
+  domain_active: 'Another domain is already active',
+  used_this_life: 'Already used this life',
+  no_recent_damage: 'No recent damage on target',
+  target_not_frozen: 'Target is not frozen',
+};
 
 export default function App() {
   const clockSync = useRef(new ClockSync());
@@ -39,6 +57,7 @@ export default function App() {
   }, [showSkillTree, showPauseMenu, phase]);
   const {
     setPhase, applyTick, setLocalClass, addKillFeedEntry, setLocalAlive, setLocalPosition, spawnDamageNumber,
+    pushNotification, setVoteState,
   } = useGameStore.getState();
   const { setLocalPlayerId, setRoomId } = useNetworkStore.getState();
 
@@ -99,6 +118,59 @@ export default function App() {
       }
     });
 
+    const offLevelUp = wsClient.on(S2C.LEVEL_UP, (msg) => {
+      const level = msg.level as number;
+      const rank = msg.rank as string;
+      const isNewRank = RANKS.find((r) => r.minLevel === level)?.name === rank;
+      pushNotification(isNewRank ? `${rank} — Level ${level}` : `Level ${level}`, '#ffcc00');
+      audioManager.playSound(isNewRank ? 'rank_up' : 'level_up');
+      if (msg.hatGrew) {
+        pushNotification('Your hat grew!', '#ffaa44');
+        audioManager.playSound('hat_tier_up');
+      }
+    });
+
+    const offHatBuff = wsClient.on(S2C.HAT_BUFF_PROC, (msg) => {
+      const pct = Math.round((msg.damageMult as number) * 100);
+      pushNotification(`Hat knocked askew! +${pct}% damage`, '#ffaa44');
+      audioManager.playSound('hat_buff_proc');
+    });
+
+    const offVotePrompt = wsClient.on(S2C.SKILL_VOTE_PROMPT, (msg) => {
+      const timeoutMs = msg.timeoutMs as number;
+      setVoteState({
+        branchGroup: msg.branchGroup as string,
+        options: msg.options as { id: string; label: string; description: string }[],
+        expiresAt: Date.now() + timeoutMs,
+        totalMs: timeoutMs,
+      });
+      audioManager.playSound('vote_open');
+    });
+
+    const offAutoUnlocked = wsClient.on(S2C.SKILL_AUTO_UNLOCKED, (msg) => {
+      const label = msg.label as string;
+      const equip = msg.equip as { slotIndex: number; replacedSpellId: string | null } | null;
+      setVoteState(null);
+      if (equip) {
+        const replaced = equip.replacedSpellId ? getSpell(equip.replacedSpellId) : null;
+        pushNotification(
+          replaced ? `${label} auto-equipped, replacing ${replaced.name}` : `${label} auto-equipped`,
+          '#66ddaa',
+        );
+        audioManager.playSound('auto_equip_swap');
+      } else {
+        pushNotification(`${label} unlocked`, '#66ddaa');
+        audioManager.playSound('spell_unlocked');
+      }
+    });
+
+    const offCastDenied = wsClient.on(S2C.SPELL_CAST_DENIED, (msg) => {
+      const reason = msg.reason as string;
+      const text = DENY_REASON_TEXT[reason] ?? 'Cast failed';
+      pushNotification(text, '#ff6666');
+      audioManager.playSound('cast_denied');
+    });
+
     const offKillFeed = wsClient.on(S2C.KILL_FEED, (msg) => {
       addKillFeedEntry({
         killer: msg.killer as string,
@@ -113,6 +185,7 @@ export default function App() {
       if (msg.playerId === localId) {
         setLocalAlive(false);
         setPhase('dead');
+        audioManager.playSound('death_generic');
       }
     });
 
@@ -123,6 +196,7 @@ export default function App() {
         if (msg.position) setLocalPosition(msg.position as { x: number; y: number; z: number });
         setLocalAlive(true);
         setPhase('playing');
+        audioManager.playSound('respawn_materialize');
       }
     });
 
@@ -172,6 +246,11 @@ export default function App() {
       offRoomState();
       offTick();
       offHitConfirmed();
+      offLevelUp();
+      offHatBuff();
+      offVotePrompt();
+      offAutoUnlocked();
+      offCastDenied();
       offKillFeed();
       offDied();
       offRespawned();
@@ -198,6 +277,9 @@ export default function App() {
 
       {/* 2D overlay UI */}
       <HUD />
+      <NotificationFeed />
+      {phase === 'playing' && <SkillVotePrompt ws={ws.current} />}
+      {phase === 'dead' && <DeathScreen ws={ws.current} />}
 
       {/* Class selection (blocks scene interaction until chosen) */}
       {phase === 'class_select' && (

@@ -1,6 +1,7 @@
 import { v4 as uuid } from 'uuid';
 import { GameLoop } from './GameLoop.js';
 import { SpellSystem } from './systems/SpellSystem.js';
+import { ProgressionSystem } from './systems/ProgressionSystem.js';
 import { LagCompensation } from './systems/LagCompensation.js';
 import { S2C } from 'shared/events';
 import {
@@ -10,6 +11,7 @@ import {
   STATE_HISTORY_TICKS, MAX_CONCURRENT_DOMAINS,
 } from 'shared/constants';
 import { getSpell } from 'shared/spells';
+import { XP_PER_KILL, levelFromXp, rankForLevel, hatBuffTierForLevel, HAT_BUFF_DAMAGE_MULT } from 'shared/leveling';
 
 const SPAWN_POSITIONS = [
   { x: 0, y: PLAYER_HEIGHT, z: -20 },
@@ -34,6 +36,7 @@ export class Room {
     this.tick = 0;
     this.spawnIndex = 0;
     this.spellSystem = new SpellSystem(this);
+    this.progressionSystem = new ProgressionSystem(this);
     this.lagCompensation = new LagCompensation(STATE_HISTORY_TICKS);
     this.loop = new GameLoop(TICK_RATE, () => this.update());
     this._pendingRespawns = []; // { playerId, at }
@@ -128,6 +131,9 @@ export class Room {
       if (player) player.tickEffects(now);
     }
 
+    // Auto-resolve any skill-tree fork votes nobody answered in time
+    this.progressionSystem.tickVotes(now);
+
     // Save snapshot for lag compensation
     this.lagCompensation.save(this.tick, now, this._snapshotState());
 
@@ -214,6 +220,14 @@ export class Room {
     if (input.mobility) {
       this.spellSystem.handleMobility(player, input);
     }
+
+    // Handle basic attack (RMB) / melee (F) -- universal, outside the equip slots
+    if (input.basicAttack) {
+      this.spellSystem.handleBasicAttack(player, input.basicAttack.aimDir, input.clientTimestamp);
+    }
+    if (input.melee) {
+      this.spellSystem.handleMelee(player, input.melee.aimDir, input.clientTimestamp);
+    }
   }
 
   applyDamage(targetId, damage, sourceId, spellId) {
@@ -240,11 +254,17 @@ export class Room {
       finalDamage *= 1.2;
     }
 
+    // Hat contact buff: knocking an opponent's hat off grants a temporary damage buff
+    const attacker = this.server.players.get(sourceId);
+    if (attacker && attacker.hasEffect('hat_buff')) {
+      const tier = attacker.activeEffects.get('hat_buff')?.stacks ?? 0;
+      finalDamage *= (1 + (HAT_BUFF_DAMAGE_MULT[tier] ?? 0));
+    }
+
     target.health = Math.max(0, target.health - Math.round(finalDamage));
     target.damageTaken += Math.round(finalDamage);
 
     // Track attacker's damage for Death Note / assists
-    const attacker = this.server.players.get(sourceId);
     if (attacker) {
       attacker.damageDealt += Math.round(finalDamage);
       attacker.recordDamageTo(targetId);
@@ -285,6 +305,20 @@ export class Room {
       if (killer.class === 'dark' && killer.unlockedNodes.has('crimson_hunger')) {
         killer.health = Math.min(killer.maxHealth, killer.health + 40);
       }
+
+      const prevLevel = killer.level;
+      killer.xp += XP_PER_KILL;
+      killer.level = levelFromXp(killer.xp);
+      if (killer.level > prevLevel) {
+        this.server.send(killer, {
+          type: S2C.LEVEL_UP,
+          level: killer.level,
+          rank: rankForLevel(killer.level).name,
+          hatGrew: hatBuffTierForLevel(killer.level) > hatBuffTierForLevel(prevLevel),
+        });
+      }
+
+      this.progressionSystem.tryAutoUnlock(killer);
     }
 
     this.server.broadcast(this.id, {
@@ -326,6 +360,7 @@ export class Room {
         velocity: { ...p.velocity },
         health: p.health,
         isAlive: p.isAlive,
+        level: p.level,
         activeEffects: new Map(p.activeEffects),
       };
     }

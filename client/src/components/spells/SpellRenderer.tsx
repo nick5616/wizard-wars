@@ -7,6 +7,7 @@ import { ProjectileSpell } from './ProjectileSpell';
 import { HitscanFlash } from './HitscanFlash';
 import { BeamSpell } from './BeamSpell';
 import { DomainExpansion } from './DomainExpansion';
+import { MeleeSwing } from './MeleeSwing';
 
 export function SpellRenderer() {
   const projectiles = useGameStore((s) => s.projectiles);
@@ -32,6 +33,9 @@ export function SpellRenderer() {
         }
         if (effect.type === 'beam') {
           return <BeamSpell key={effect.id} effect={effect} />;
+        }
+        if (effect.type === 'melee_swing') {
+          return <MeleeSwing key={effect.id} effect={effect} />;
         }
         return null;
       })}

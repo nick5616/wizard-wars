@@ -20,7 +20,7 @@ export const BASE_MOVE_SPEED = 8; // units/sec
 export const SPRINT_MULTIPLIER = 1.6;
 export const JUMP_FORCE = 6;
 export const PLAYER_MAX_HEALTH = 200;
-export const RESPAWN_DELAY = 3000; // ms
+export const RESPAWN_DELAY = 8000; // ms -- safety-net auto-respawn for AFK players; normal flow is player-initiated (see DeathScreen)
 
 // Gravity
 export const GRAVITY = -18; // units/s^2

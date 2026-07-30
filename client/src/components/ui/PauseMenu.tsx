@@ -475,6 +475,8 @@ function SettingsTab({ ws, onClose, classColor }: {
             ['Jump', 'Space'],
             ['Look', 'Mouse (click canvas)'],
             ['Cast', 'Left click'],
+            ['Basic attack', 'Right click'],
+            ['Melee', 'F'],
             ['Mobility', 'Shift'],
             ['Switch spell', '1–4 / Scroll'],
             ['Skill tree', 'Tab'],

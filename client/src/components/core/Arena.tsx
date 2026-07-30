@@ -106,17 +106,6 @@ export function Arena() {
         />
       </mesh>
 
-      {/* Ceiling */}
-      <mesh position={[0, ARENA_WALL_HEIGHT, 0]} rotation={[Math.PI, 0, 0]}>
-        <circleGeometry args={[ARENA_RADIUS, FLOOR_SEGMENTS]} />
-        <meshStandardMaterial
-          color={domainColor ?? '#181828'}
-          emissive={domainColor ?? '#0a0a18'}
-          emissiveIntensity={0.8}
-          side={THREE.BackSide}
-        />
-      </mesh>
-
       <Pillars count={8} radius={ARENA_RADIUS - 1.5} domainColor={domainColor} />
     </>
   );

@@ -12,23 +12,24 @@ interface DomainExpansionProps {
   domain: DomainState;
 }
 
+// Densities are tuned against ARENA_RADIUS so a player on one side of the
+// arena can still faintly make out the far wall (up to ~60 units away)
+// instead of it vanishing into the fog color.
 const DOMAIN_CONFIG: Record<string, { fogColor: string; fogDensity: number; ambientColor: string; particleColor: string }> = {
-  inferno_domain:  { fogColor: '#ff2200', fogDensity: 0.04, ambientColor: '#ff4400', particleColor: '#ff6600' },
-  absolute_zero:   { fogColor: '#88bbff', fogDensity: 0.05, ambientColor: '#aaccff', particleColor: '#ffffff' },
-  event_horizon:   { fogColor: '#110022', fogDensity: 0.06, ambientColor: '#330055', particleColor: '#8800ff' },
-  the_last_word:   { fogColor: '#222222', fogDensity: 0.02, ambientColor: '#666666', particleColor: '#ffffff' },
-  terra_domain:    { fogColor: '#331100', fogDensity: 0.05, ambientColor: '#553300', particleColor: '#886622' },
+  inferno_domain:  { fogColor: '#ff2200', fogDensity: 0.014, ambientColor: '#ff4400', particleColor: '#ff6600' },
+  absolute_zero:   { fogColor: '#88bbff', fogDensity: 0.016, ambientColor: '#aaccff', particleColor: '#ffffff' },
+  event_horizon:   { fogColor: '#110022', fogDensity: 0.018, ambientColor: '#330055', particleColor: '#8800ff' },
+  the_last_word:   { fogColor: '#222222', fogDensity: 0.008, ambientColor: '#666666', particleColor: '#ffffff' },
+  terra_domain:    { fogColor: '#331100', fogDensity: 0.014, ambientColor: '#553300', particleColor: '#886622' },
 };
 
 export function DomainExpansion({ domain }: DomainExpansionProps) {
   const { scene } = useThree();
   const config = DOMAIN_CONFIG[domain.spellId];
-  if (!config) return null;
-
   const prevFog = useRef<THREE.Fog | THREE.FogExp2 | null>(null);
-  const prevAmbient = useRef<string>('#334466');
 
   useEffect(() => {
+    if (!config) return;
     prevFog.current = scene.fog;
     scene.fog = new THREE.FogExp2(config.fogColor, config.fogDensity);
     return () => {
@@ -36,6 +37,7 @@ export function DomainExpansion({ domain }: DomainExpansionProps) {
     };
   }, [scene, config]);
 
+  if (!config) return null;
   return <TelegraphRing domain={domain} color={config.particleColor} />;
 }
 

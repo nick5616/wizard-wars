@@ -1,8 +1,9 @@
 import { v4 as uuid } from 'uuid';
-import { getSpell, MOBILITY_SPELL } from 'shared/spells';
+import { getSpell, MOBILITY_SPELL, BASIC_ATTACK, MELEE_ATTACK } from 'shared/spells';
 import { S2C } from 'shared/events';
 import { DOMAIN_CONFIGS } from 'shared/gameConfig';
 import { MAX_CONCURRENT_DOMAINS, ARENA_RADIUS, PLAYER_HEIGHT } from 'shared/constants';
+import { hatCenterY, hatRadius } from 'shared/leveling';
 
 export class SpellSystem {
   constructor(room) {
@@ -94,6 +95,91 @@ export class SpellSystem {
     }
   }
 
+  // ── Basic attack (RMB) & melee (F) ──────────────────────────────────────
+  // Universal per-class abilities outside the 4 equip slots -- always
+  // available from spawn, no unlock needed. Same "outside the slot system"
+  // treatment as handleMobility above.
+
+  handleBasicAttack(player, aimDir, clientTimestamp) {
+    const spellId = BASIC_ATTACK[player.class];
+    if (!spellId || !player.isAlive) return;
+    const spell = getSpell(spellId);
+    if (!spell || player.isOnCooldown(spellId)) return;
+
+    player.setCooldown(spellId, spell.cooldown);
+    this._castHitscan(player, spell, aimDir, clientTimestamp);
+  }
+
+  handleMelee(player, aimDir, clientTimestamp) {
+    const spellId = MELEE_ATTACK[player.class];
+    if (!spellId || !player.isAlive) return;
+    const spell = getSpell(spellId);
+    if (!spell || player.isOnCooldown(spellId)) return;
+
+    player.setCooldown(spellId, spell.cooldown);
+
+    const range = spell.radius; // reused field as melee reach, see shared/spells.js MELEE_ATTACKS
+    let hitPlayerId = null;
+    let closestDist = Infinity;
+
+    for (const pid of this.room.playerIds) {
+      if (pid === player.id) continue;
+      const target = this.room.server.players.get(pid);
+      if (!target || !target.isAlive) continue;
+
+      const dx = target.position.x - player.position.x;
+      const dz = target.position.z - player.position.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      if (dist > range || dist < 0.001) continue;
+
+      // Forward-facing cone check (~60°), same dot-product approach as _resolveBeam
+      const dot = (dx / dist) * aimDir.x + (dz / dist) * aimDir.z;
+      if (dot < 0.5) continue;
+
+      if (dist < closestDist) {
+        closestDist = dist;
+        hitPlayerId = pid;
+      }
+    }
+
+    // Broadcast a lightweight swing visual regardless of whether it connected
+    const swingId = uuid();
+    this.room.effects.set(swingId, {
+      id: swingId,
+      type: 'melee_swing',
+      spellId,
+      ownerId: player.id,
+      origin: { ...player.position },
+      direction: aimDir,
+      color: spell.color,
+      glowColor: spell.glowColor,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 200,
+      active: true,
+    });
+
+    if (!hitPlayerId) return;
+
+    const target = this.room.server.players.get(hitPlayerId);
+    const dmg = this.room.applyDamage(hitPlayerId, spell.damage, player.id, spellId);
+
+    this.room.server.send(player, {
+      type: S2C.HIT_CONFIRMED,
+      targetId: hitPlayerId,
+      spellId,
+      damage: dmg,
+      isHeadshot: false,
+    });
+
+    // Hat contact: extrapolate the aim ray out to the target's distance and see
+    // if it lines up with their hat band, the same idea as the hitscan/projectile check.
+    const travelY = player.position.y + aimDir.y * closestDist;
+    const hatCenter = hatCenterY(target.position.y, target.level);
+    if (Math.abs(travelY - hatCenter) < hatRadius(target.level) + 0.3) {
+      this.room.progressionSystem.applyHatBuff(player.id, target.level);
+    }
+  }
+
   // ── Projectile ────────────────────────────────────────────────────────────
 
   _castProjectile(player, spell, aimDir, clientTimestamp, isPhantom = false) {
@@ -174,6 +260,7 @@ export class SpellSystem {
       if (target && spell.statusEffect) {
         target.applyEffect(spell.statusEffect, spell.statusDuration);
       }
+      if (result.isHatHit) this.room.progressionSystem.applyHatBuff(player.id, result.targetLevel);
 
       this.room.server.send(player, {
         type: S2C.HIT_CONFIRMED,
@@ -374,10 +461,12 @@ export class SpellSystem {
         const bodyDist = Math.sqrt(dx*dx + dyBody*dyBody + dz*dz);
         const isHeadshot = headDist < proj.radius + 0.22;
         const isBodyHit = bodyDist < proj.radius + 0.5;
-        if (isHeadshot || isBodyHit) hits.push({ playerId: pid, isHeadshot });
+        const hatCenter = hatCenterY(target.position.y, target.level);
+        const isHatHit = Math.sqrt(dx*dx + (proj.position.y - hatCenter) ** 2 + dz*dz) < hatRadius(target.level) + proj.radius;
+        if (isHeadshot || isBodyHit) hits.push({ playerId: pid, isHeadshot, isHatHit, targetLevel: target.level });
       }
 
-      for (const { playerId, isHeadshot } of hits) {
+      for (const { playerId, isHeadshot, isHatHit, targetLevel } of hits) {
         const target = this.room.server.players.get(playerId);
         if (!target || !target.isAlive) continue;
 
@@ -386,6 +475,7 @@ export class SpellSystem {
         if (proj.statusEffect && target) {
           target.applyEffect(proj.statusEffect, proj.statusDuration);
         }
+        if (isHatHit) this.room.progressionSystem.applyHatBuff(proj.ownerId, targetLevel);
 
         // Lifesteal
         const owner = this.room.server.players.get(proj.ownerId);

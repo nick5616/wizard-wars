@@ -2,6 +2,7 @@ import { useGameStore } from '../../stores/gameStore';
 import { useNetworkStore } from '../../stores/networkStore';
 import { Crosshair } from './Crosshair';
 import { HealthBar } from './HealthBar';
+import { ExpBar } from './ExpBar';
 import { SpellBar } from './SpellBar';
 import { KillFeed } from './KillFeed';
 
@@ -14,6 +15,7 @@ export function HUD() {
   return (
     <>
       <Crosshair />
+      <ExpBar />
       <HealthBar />
       <SpellBar />
       <KillFeed />
@@ -50,43 +52,6 @@ export function HUD() {
         </div>
       )}
 
-      {/* Skill points indicator */}
-      {local.skillPoints > 0 && (
-        <div style={{
-          position: 'fixed',
-          bottom: 110,
-          right: 20,
-          background: 'rgba(255,200,0,0.15)',
-          border: '1px solid rgba(255,200,0,0.4)',
-          borderRadius: 3,
-          padding: '4px 10px',
-          fontSize: 13,
-          color: '#ffcc00',
-          letterSpacing: 1,
-          pointerEvents: 'none',
-          zIndex: 100,
-        }}>
-          {local.skillPoints} skill {local.skillPoints === 1 ? 'point' : 'points'} — press Tab
-        </div>
-      )}
-
-      {/* Death overlay */}
-      {!local.isAlive && (
-        <div style={{
-          position: 'fixed',
-          inset: 0,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          background: 'rgba(0,0,0,0.65)',
-          zIndex: 200,
-          flexDirection: 'column',
-          gap: 16,
-        }}>
-          <div style={{ fontSize: 32, color: '#cc0000', letterSpacing: 6 }}>DEFEATED</div>
-          <div style={{ fontSize: 15, color: '#999', letterSpacing: 2 }}>Respawning...</div>
-        </div>
-      )}
     </>
   );
 }

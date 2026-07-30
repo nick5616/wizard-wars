@@ -1,3 +1,5 @@
+import { hatCenterY, hatRadius } from 'shared/leveling';
+
 /**
  * Maintains a rolling buffer of game state snapshots.
  * When a hit must be resolved, rewind to the snapshot closest to the
@@ -48,29 +50,38 @@ export class LagCompensation {
 
     let closest = null;
     let closestDist = Infinity;
-    let closestIsHeadshot = false;
+    let closestZone = 'body';
+    let closestLevel = 1;
 
     for (const [playerId, playerSnap] of Object.entries(snap.state.players)) {
       if (playerId === shooterId) continue;
       if (!playerSnap.isAlive) continue;
 
       const pos = playerSnap.position;
+      const level = playerSnap.level ?? 1;
       const headCenter = { x: pos.x, y: pos.y - 0.2, z: pos.z };
       const bodyCenter = { x: pos.x, y: pos.y - 0.9, z: pos.z };
+      const hatCenter = { x: pos.x, y: hatCenterY(pos.y, level), z: pos.z };
+
       const headDist = this._raySphereIntersect(origin, direction, headCenter, radius + 0.22);
       const bodyDist = this._raySphereIntersect(origin, direction, bodyCenter, radius + 0.5);
-      const isHeadshot = headDist !== null && (bodyDist === null || headDist <= bodyDist);
-      const hitDist = headDist ?? bodyDist;
+      const hatDist = this._raySphereIntersect(origin, direction, hatCenter, radius + hatRadius(level));
 
-      if (hitDist !== null && hitDist < closestDist) {
-        closestDist = hitDist;
+      let dist = null, zone = null;
+      for (const [d, z] of [[headDist, 'head'], [bodyDist, 'body'], [hatDist, 'hat']]) {
+        if (d !== null && (dist === null || d < dist)) { dist = d; zone = z; }
+      }
+
+      if (dist !== null && dist < closestDist) {
+        closestDist = dist;
         closest = playerId;
-        closestIsHeadshot = isHeadshot;
+        closestZone = zone;
+        closestLevel = level;
       }
     }
 
     return closest
-      ? { hit: true, playerId: closest, distance: closestDist, isHeadshot: closestIsHeadshot }
+      ? { hit: true, playerId: closest, distance: closestDist, isHeadshot: closestZone === 'head', isHatHit: closestZone === 'hat', targetLevel: closestLevel }
       : { hit: false };
   }
 
