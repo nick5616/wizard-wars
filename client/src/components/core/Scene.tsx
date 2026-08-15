@@ -9,6 +9,7 @@ import { CameraController } from './CameraController';
 import { RemotePlayer } from './RemotePlayer';
 import { SpellRenderer } from '../spells/SpellRenderer';
 import { DamageNumbers } from '../spells/DamageNumbers';
+import { TremorSense } from './TremorSense';
 import { useGameStore } from '../../stores/gameStore';
 import { useNetworkStore } from '../../stores/networkStore';
 import type { WebSocketClient } from '../../networking/WebSocketClient';
@@ -42,6 +43,7 @@ export function Scene({ ws, prediction, interpolation }: SceneProps) {
         <Arena />
         <SpellRenderer />
         <DamageNumbers />
+        <TremorSense />
 
         {remotePlayers.map(player => (
           <RemotePlayer

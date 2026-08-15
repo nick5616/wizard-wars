@@ -35,6 +35,9 @@ export function HUD() {
         <div style={{ color: '#888', fontSize: 12, marginTop: 2 }}>{rtt}ms</div>
       </div>
 
+      {/* Fire Solar Flare: brief blind flash when hit by a caster with the passive */}
+      <BlindFlash />
+
       {/* Class badge */}
       {local.class && (
         <div style={{
@@ -53,5 +56,28 @@ export function HUD() {
       )}
 
     </>
+  );
+}
+
+const BLIND_DURATION_MS = 500;
+
+function BlindFlash() {
+  const blind = useGameStore((s) => s.local.activeEffects.blind);
+  if (!blind) return null;
+
+  const remaining = blind.expiresAt - Date.now();
+  if (remaining <= 0) return null;
+  const opacity = Math.min(0.85, (remaining / BLIND_DURATION_MS) * 0.85);
+
+  return (
+    <div style={{
+      position: 'fixed',
+      inset: 0,
+      background: '#fff',
+      opacity,
+      pointerEvents: 'none',
+      zIndex: 250,
+      transition: 'opacity 80ms linear',
+    }} />
   );
 }

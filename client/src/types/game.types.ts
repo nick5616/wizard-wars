@@ -50,6 +50,10 @@ export interface PlayerState {
   unlockedNodes: string[];
   kills: number;
   ping: number;
+  isBot: boolean;
+  // Bot-only (Experiment Lab)
+  behavior?: 'static' | 'docile' | 'aggressive';
+  autoEquipOnLevel?: boolean;
 }
 
 export interface ProjectileState {
@@ -80,6 +84,18 @@ export interface EffectState {
   direction?: Vec3;
   color?: string;
   glowColor?: string;
+  // AoE specifics
+  startedAt?: number;
+  activatesAt?: number;
+  windupMs?: number;
+  duration?: number;
+  damage?: number;
+  statusEffect?: string | null;
+  shape?: 'point' | 'line';
+  length?: number;
+  triggered?: boolean;
+  // Amaterasu specifics (persistent black-fire dot on a target)
+  targetId?: string;
 }
 
 export interface DomainState {
@@ -92,6 +108,19 @@ export interface DomainState {
   active: boolean;
 }
 
+export interface BarrierState {
+  id: string;
+  ownerId: string;
+  spellId: string;
+  position: Vec3; // y is the barrier's vertical center
+  width: number;
+  height: number;
+  health: number | null;
+  breaksRemaining: number | null;
+  expiresAt: number;
+  active: boolean;
+}
+
 export interface GameTickPayload {
   tick: number;
   timestamp: number;
@@ -100,6 +129,7 @@ export interface GameTickPayload {
   projectiles: Record<string, ProjectileState>;
   effects: Record<string, EffectState>;
   domains: Record<string, DomainState>;
+  barriers: Record<string, BarrierState>;
 }
 
 export interface PendingInput {
@@ -126,4 +156,16 @@ export interface KillFeedEntry {
   victim: string;
   spellId: string | null;
   at: number;
+}
+
+export interface SimulationResult {
+  rounds: number;
+  winRateByClass: Record<string, number>;
+  // Index-disambiguated version of winRateByClass ([sideA rate, sideB rate])
+  // -- the only reliable way to tell sides apart when both picked the same
+  // class, which winRateByClass alone can't represent.
+  winRateBySide?: [number, number];
+  draws: number;
+  avgTimeToKillMs: number | null;
+  damageBySpell: Record<string, { totalDamage: number; hits: number }>;
 }

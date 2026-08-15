@@ -4,7 +4,19 @@ import { RedisClient } from './redis/RedisClient.js';
 import { Room } from './Room.js';
 import { Player } from './Player.js';
 import { WebSocketHandler } from './networking/WebSocketHandler.js';
+import { SimulationRunner } from './sim/SimulationRunner.js';
 import { S2C } from 'shared/events';
+
+/**
+ * Authoritative "is this a trusted local dev connection" check, used to gate
+ * Experiment Lab features (god-mode, bot/sim controls). A real deployed
+ * server (Cloud Run, behind any proxy/load balancer) never sees a loopback
+ * remoteAddress from an external client, so this is a genuine security
+ * boundary, not just client-side UI hiding.
+ */
+function isLoopbackAddress(addr) {
+  return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
+}
 
 export class GameServer {
   constructor({ port, redisUrl }) {
@@ -15,6 +27,7 @@ export class GameServer {
     this.rooms = new Map(); // roomId → Room
     this.players = new Map(); // playerId → Player
     this.wsHandler = new WebSocketHandler(this);
+    this.simulationRunner = new SimulationRunner();
   }
 
   async start() {
@@ -41,9 +54,10 @@ export class GameServer {
   onConnection(ws, req) {
     const playerId = uuid();
     const player = new Player({ id: playerId, ws, username: null });
+    player.isLocalConnection = isLoopbackAddress(req?.socket?.remoteAddress);
     this.players.set(playerId, player);
 
-    console.log(`[GameServer] Player connected: ${playerId} (${this.players.size} total)`);
+    console.log(`[GameServer] Player connected: ${playerId} (${this.players.size} total)${player.isLocalConnection ? ' [local]' : ''}`);
 
     ws.on('message', (data) => {
       try {
@@ -68,15 +82,31 @@ export class GameServer {
 
   onDisconnect(player) {
     if (player.roomId) {
-      const room = this.rooms.get(player.roomId);
-      room?.removePlayer(player.id);
+      this.rooms.get(player.roomId)?.removePlayer(player.id);
+      this.cleanupEmptyExperimentRoom(player.roomId);
     }
     this.players.delete(player.id);
   }
 
-  getOrCreateRoom(roomId = uuid()) {
+  /**
+   * Experiment Lab rooms are private per-player sandboxes — tear them down
+   * (bots included) once nobody real is left in them, rather than leaking a
+   * running GameLoop forever. Safe to call for any roomId; no-ops otherwise.
+   */
+  cleanupEmptyExperimentRoom(roomId) {
+    if (!roomId || !roomId.startsWith('experiment-')) return;
+    const room = this.rooms.get(roomId);
+    if (!room) return;
+    const hasRealPlayer = [...room.playerIds].some((pid) => !this.players.get(pid)?.isBot);
+    if (!hasRealPlayer) {
+      room.stop();
+      this.rooms.delete(roomId);
+    }
+  }
+
+  getOrCreateRoom(roomId = uuid(), options = {}) {
     if (!this.rooms.has(roomId)) {
-      const room = new Room({ id: roomId, server: this });
+      const room = new Room({ id: roomId, server: this, ...options });
       this.rooms.set(roomId, room);
       room.start();
     }
@@ -84,7 +114,7 @@ export class GameServer {
   }
 
   send(player, msg) {
-    if (player.ws.readyState === 1 /* OPEN */) {
+    if (player.isConnected()) {
       player.ws.send(JSON.stringify(msg));
     }
   }
@@ -95,7 +125,7 @@ export class GameServer {
     const json = JSON.stringify(msg);
     for (const pid of room.playerIds) {
       const p = this.players.get(pid);
-      if (p && pid !== excludeId && p.ws.readyState === 1) {
+      if (p && pid !== excludeId && p.isConnected()) {
         p.ws.send(json);
       }
     }

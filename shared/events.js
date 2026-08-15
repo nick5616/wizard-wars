@@ -9,6 +9,15 @@ export const C2S = {
   RESPAWN:          'c2s:respawn',
   DEBUG_GRANT:      'c2s:debug_grant',
   SKILL_VOTE_RESOLVE: 'c2s:skill_vote_resolve',
+  SPAWN_BOTS:       'c2s:spawn_bots',
+  DESPAWN_BOTS:     'c2s:despawn_bots',
+  // Experiment Lab (localhost-only, see Player.isLocalConnection)
+  SPAWN_BOT:        'c2s:spawn_bot',
+  DESPAWN_BOT:      'c2s:despawn_bot',
+  SET_BOT_BEHAVIOR: 'c2s:set_bot_behavior',
+  SET_BOT_LOADOUT:  'c2s:set_bot_loadout',
+  SET_BOT_AUTO_EQUIP: 'c2s:set_bot_auto_equip',
+  RUN_SIMULATION:   'c2s:run_simulation',
 };
 
 // Server → Client
@@ -34,6 +43,9 @@ export const S2C = {
   SKILL_AUTO_UNLOCKED: 's2c:skill_auto_unlocked',
   SKILL_VOTE_PROMPT:   's2c:skill_vote_prompt',
   ERROR:            's2c:error',
+  // Experiment Lab
+  SIMULATION_PROGRESS: 's2c:simulation_progress',
+  SIMULATION_RESULT:   's2c:simulation_result',
 };
 
 // Input flags (bitmask for compact transmission)

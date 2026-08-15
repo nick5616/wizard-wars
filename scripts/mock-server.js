@@ -59,6 +59,7 @@ wss.on('connection', (ws) => {
       projectiles: {},
       effects: {},
       domains: {},
+      barriers: {},
     });
   }
 

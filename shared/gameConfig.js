@@ -13,7 +13,7 @@ export const STATUS_EFFECTS = {
 
 export const DOMAIN_CONFIGS = {
   inferno_domain: {
-    duration: 4000,
+    duration: 10000,
     telegraph: 800,
     cooldown: 60000,
     effect: 'projectile_acceleration',

@@ -1,11 +1,14 @@
 import { PLAYER_MAX_HEALTH, BASE_MOVE_SPEED, PLAYER_HEIGHT, RESPAWN_DELAY, DEATH_NOTE_DAMAGE_WINDOW } from 'shared/constants';
 import { DEFAULT_EQUIPPED, MOBILITY_SPELL } from 'shared/spells';
+import { STATUS_EFFECTS } from 'shared/gameConfig';
 
 export class Player {
   constructor({ id, ws, username }) {
     this.id = id;
     this.ws = ws;
     this.username = username ?? `Wizard_${id.slice(0, 4)}`;
+    this.isLocalConnection = false; // set by GameServer.onConnection; gates Experiment Lab features
+    this.isGodMode = false; // Experiment Lab: invulnerable + untargetable
 
     // State
     this.class = null;
@@ -60,17 +63,32 @@ export class Player {
     this.parryActive = false;
     this.parryExpiry = 0;
     this.lastParryTime = 0;
+    this.lastParriedBy = null; // id of whoever was just parried — Riposte's teleport target
 
     // Passive counters
     this.keenEdgeCounter = 0; // sword: every 5th hit deals double
-    this.geologicStacks = 0; // earth: defense stacks while casting
-    this.geologicResetTimer = null;
+    this.geologicStacks = 0; // earth: defense stacks per cast while below 4, resets on taking a hit
     this.kindlingStacks = 0; // fire: damage buff after Ember Flick
-    this.bedrock = false; // earth: standing still buff
+    this.kindlingExpiry = 0;
+    this.immolateActiveUntil = 0; // fire: Immolate self-aura window, for Backdraft
+    this.backdraftReadyAt = 0;
+    this.bedrock = false; // earth: standing still buff (true once the 1.5s idle timer has elapsed)
+    this.bedrockIdleSince = 0; // earth: timestamp movement last stopped
+    this.lastIceSpellCastAt = 0; // ice: flash_freeze — two ice spells within 1.5s
+    this.nextPermafrostAt = 0; // ice: permafrost frost-trail tick timer
+    this.ironWillExpiry = 0; // sword: -5% damage taken after a Warlord (blade_rain branch) spell
+    this.crimsonVeilExpiry = 0; // dark: brief damage reduction after a vampiric kill
+    this.hasAbyssFreeCast = false; // dark: next spell after Null Gaze is free + instant
+    this.sovereignCutReadyBonus = 0; // sword: ms shaved off Sovereign Cut's cooldown by inevitable
+    this.empoweredSlashReady = false; // sword: Counter — next Iron Edge after a parry is doubled
 
     // Phase slip state (dark)
     this.isPhasing = false;
     this.phaseExpiry = 0;
+
+    // Windup-cast in progress (death_note, petrify, cryo_lance, siege_blade, the_monolith, ...)
+    // { spellId, spell, aimDir, targetId, clientTimestamp, readyAt, interruptible }
+    this.pendingCast = null;
   }
 
   selectClass(className) {
@@ -92,14 +110,32 @@ export class Player {
     this.activeEffects.clear();
     this.oncePerLifeUsed.clear();
     this.parryActive = false;
+    this.lastParryTime = 0;
+    this.lastParriedBy = null;
     this.isPhasing = false;
     this.phantomCasts = 0;
     this.keenEdgeCounter = 0;
     this.geologicStacks = 0;
     this.kindlingStacks = 0;
+    this.kindlingExpiry = 0;
+    this.immolateActiveUntil = 0;
+    this.backdraftReadyAt = 0;
     this.bedrock = false;
+    this.bedrockIdleSince = 0;
+    this.lastIceSpellCastAt = 0;
+    this.nextPermafrostAt = 0;
+    this.ironWillExpiry = 0;
+    this.crimsonVeilExpiry = 0;
+    this.hasAbyssFreeCast = false;
+    this.sovereignCutReadyBonus = 0;
+    this.empoweredSlashReady = false;
+    this.pendingCast = null;
     // clear per-life cooldowns
     this.cooldowns.delete('death_note');
+  }
+
+  isConnected() {
+    return !!this.ws && this.ws.readyState === 1;
   }
 
   isOnCooldown(spellId) {
@@ -117,11 +153,15 @@ export class Player {
     return Math.max(0, expiry - Date.now());
   }
 
-  applyEffect(effectType, duration, stacks = 1) {
+  applyEffect(effectType, duration, stacks = 1, sourceId = null) {
     const existing = this.activeEffects.get(effectType);
     const newExpiry = Date.now() + duration;
     const newStacks = existing ? Math.min(existing.stacks + stacks, 3) : stacks;
-    this.activeEffects.set(effectType, { expiresAt: newExpiry, stacks: newStacks });
+    const entry = { expiresAt: newExpiry, stacks: newStacks, sourceId: sourceId ?? existing?.sourceId ?? null };
+    if (effectType === 'burn') {
+      entry.nextTickAt = existing?.nextTickAt ?? (Date.now() + STATUS_EFFECTS.burn.tickInterval);
+    }
+    this.activeEffects.set(effectType, entry);
   }
 
   hasEffect(effectType) {
@@ -136,6 +176,12 @@ export class Player {
 
   removeEffect(effectType) {
     this.activeEffects.delete(effectType);
+  }
+
+  /** Permanent (not duration-based) max-HP shrink — dark Entropy passive. */
+  applyVoidDecay(amount) {
+    this.maxHealth = Math.max(20, this.maxHealth - amount);
+    this.health = Math.min(this.health, this.maxHealth);
   }
 
   tickEffects(now) {
@@ -190,6 +236,7 @@ export class Player {
       unlockedNodes: [...this.unlockedNodes],
       kills: this.kills,
       ping: this.ping,
+      isBot: false,
     };
   }
 }

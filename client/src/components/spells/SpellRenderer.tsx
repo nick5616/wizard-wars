@@ -8,11 +8,15 @@ import { HitscanFlash } from './HitscanFlash';
 import { BeamSpell } from './BeamSpell';
 import { DomainExpansion } from './DomainExpansion';
 import { MeleeSwing } from './MeleeSwing';
+import { BarrierRenderer } from './BarrierRenderer';
+import { AoeSpell } from './AoeSpell';
+import { AmaterasuSpell } from './AmaterasuSpell';
 
 export function SpellRenderer() {
   const projectiles = useGameStore((s) => s.projectiles);
   const effects = useGameStore((s) => s.effects);
   const domains = useGameStore((s) => s.domains);
+  const barriers = useGameStore((s) => s.barriers);
 
   const now = Date.now();
 
@@ -37,6 +41,12 @@ export function SpellRenderer() {
         if (effect.type === 'melee_swing') {
           return <MeleeSwing key={effect.id} effect={effect} />;
         }
+        if (effect.type === 'aoe') {
+          return <AoeSpell key={effect.id} effect={effect} />;
+        }
+        if (effect.type === 'amaterasu') {
+          return <AmaterasuSpell key={effect.id} effect={effect} />;
+        }
         return null;
       })}
 
@@ -45,6 +55,11 @@ export function SpellRenderer() {
         domain.active && now < domain.expiresAt ? (
           <DomainExpansion key={domain.id} domain={domain} />
         ) : null
+      )}
+
+      {/* Barriers (Ice Wall, Rock Wall) */}
+      {Object.values(barriers).map((barrier) =>
+        barrier.active ? <BarrierRenderer key={barrier.id} barrier={barrier} /> : null
       )}
     </>
   );

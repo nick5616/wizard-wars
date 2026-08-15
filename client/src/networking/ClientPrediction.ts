@@ -10,8 +10,11 @@
  *     position to correct any drift.
  */
 
-import { BASE_MOVE_SPEED, JUMP_FORCE, GRAVITY, PLAYER_HEIGHT, ARENA_RADIUS } from 'shared/constants';
+import { BASE_MOVE_SPEED, JUMP_FORCE, GRAVITY, PLAYER_HEIGHT, ARENA_RADIUS, PLAYER_CAPSULE_RADIUS } from 'shared/constants';
+import { terrainHeightAt, resolveTerrainCollision, resolveCircleObstacles } from 'shared/mapLayout';
 import type { Vec3, PendingInput } from '../types/game.types';
+
+export interface CircleObstacle { x: number; z: number; radius: number; }
 
 export class ClientPrediction {
   private seq = 0;
@@ -22,7 +25,7 @@ export class ClientPrediction {
   }
 
   /** Predict where the player will be after applying this input locally. */
-  predict(currentPos: Vec3, currentVel: Vec3, flags: number, yaw: number, dt: number): { pos: Vec3; vel: Vec3 } {
+  predict(currentPos: Vec3, currentVel: Vec3, flags: number, yaw: number, dt: number, barriers: CircleObstacle[] = []): { pos: Vec3; vel: Vec3 } {
     const speedMult = 1.0; // passives can modify later
     const speed = BASE_MOVE_SPEED * speedMult;
 
@@ -38,7 +41,8 @@ export class ClientPrediction {
     if (len > 0) { vx = (vx / len) * speed; vz = (vz / len) * speed; }
 
     let vy = currentVel.y;
-    const isGrounded = currentPos.y <= PLAYER_HEIGHT + 0.05;
+    const currentGroundY = PLAYER_HEIGHT + terrainHeightAt(currentPos.x, currentPos.z);
+    const isGrounded = currentPos.y <= currentGroundY + 0.05;
 
     if (!isGrounded) vy += GRAVITY * dt;
 
@@ -50,7 +54,23 @@ export class ClientPrediction {
     let y = currentPos.y + vy * dt;
     let z = currentPos.z + vz * dt;
 
-    if (y <= PLAYER_HEIGHT) { y = PLAYER_HEIGHT; vy = 0; }
+    // Terrain + barriers: push out of walls/platform sides and any active spell
+    // barrier, same as the server's Room._simulatePlayer.
+    const feetYBeforeCollision = y - PLAYER_HEIGHT;
+    const resolved = resolveTerrainCollision(x, z, PLAYER_CAPSULE_RADIUS, feetYBeforeCollision);
+    x = resolved.x;
+    z = resolved.z;
+    if (barriers.length > 0) {
+      const barrierResolved = resolveCircleObstacles(x, z, PLAYER_CAPSULE_RADIUS, barriers);
+      x = barrierResolved.x;
+      z = barrierResolved.z;
+    }
+
+    // Same ground-snap tolerance as the server, so ramp descent doesn't
+    // stutter and prediction doesn't fight reconciliation near terrain.
+    const groundY = PLAYER_HEIGHT + terrainHeightAt(x, z);
+    const huggingSurface = vy <= 0 && (y - groundY) <= 0.3;
+    if (y <= groundY || huggingSurface) { y = groundY; vy = 0; }
 
     const dist = Math.sqrt(x * x + z * z);
     if (dist > ARENA_RADIUS - 1) {
@@ -80,6 +100,7 @@ export class ClientPrediction {
     serverPos: Vec3,
     ackSeq: number,
     currentVel: Vec3,
+    barriers: CircleObstacle[] = [],
   ): Vec3 {
     // Drop acknowledged inputs
     this.pending = this.pending.filter(i => i.seq > ackSeq);
@@ -92,7 +113,7 @@ export class ClientPrediction {
     const dt = 1 / 64; // one tick
 
     for (const input of this.pending) {
-      const result = this.predict(pos, vel, input.flags, input.yaw, dt);
+      const result = this.predict(pos, vel, input.flags, input.yaw, dt, barriers);
       pos = result.pos;
       vel = result.vel;
     }

@@ -2,8 +2,9 @@ import { v4 as uuid } from 'uuid';
 import { getSpell, MOBILITY_SPELL, BASIC_ATTACK, MELEE_ATTACK } from 'shared/spells';
 import { S2C } from 'shared/events';
 import { DOMAIN_CONFIGS } from 'shared/gameConfig';
-import { MAX_CONCURRENT_DOMAINS, ARENA_RADIUS, PLAYER_HEIGHT } from 'shared/constants';
+import { MAX_CONCURRENT_DOMAINS, ARENA_RADIUS, PLAYER_HEIGHT, CAST_MAX_RANGE } from 'shared/constants';
 import { hatCenterY, hatRadius } from 'shared/leveling';
+import { terrainRaycastBlocked, rayIntersectsCylinder } from 'shared/mapLayout';
 
 export class SpellSystem {
   constructor(room) {
@@ -23,15 +24,43 @@ export class SpellSystem {
     // Check alive and class match
     if (!player.isAlive) return this._deny(player, spellId, 'not_alive');
     if (spell.class !== player.class) return this._deny(player, spellId, 'wrong_class');
+    if (player.hasEffect('stun')) return this._deny(player, spellId, 'stunned');
+    if (player.pendingCast) return this._deny(player, spellId, 'casting');
+
+    // Dark The Abyss: a primed free cast skips the cooldown check and (below) the windup entirely
+    const isAbyssFreeCast = player.hasAbyssFreeCast;
 
     // Check cooldown
-    if (player.isOnCooldown(spellId)) {
+    if (!isAbyssFreeCast && player.isOnCooldown(spellId)) {
       return this._deny(player, spellId, 'on_cooldown', player.getCooldownRemaining(spellId));
     }
 
     // Domain: only one active at a time globally
     if (spell.type === 'domain' && this.room.getActiveDomain()) {
       return this._deny(player, spellId, 'domain_active');
+    }
+
+    // Direct-target spells (shatter, petrify, amaterasu, death_note) must have
+    // their target within cast range and unobstructed by terrain/barriers --
+    // this had no server-side check at all, so any targetId landed instantly
+    // regardless of distance or walls. Real players are implicitly limited by
+    // needing the client's crosshair raycast to resolve a targetId in the
+    // first place, but bots set targetId directly with no such gate, so
+    // without this they could land Amaterasu etc. on an enemy anywhere on
+    // the map the instant it left cooldown.
+    if (spell.requiresTarget) {
+      const target = this.room.server.players.get(targetId);
+      if (!target || !target.isAlive) return this._deny(player, spellId, 'invalid_target');
+      const dx = target.position.x - player.position.x;
+      const dy = target.position.y - player.position.y;
+      const dz = target.position.z - player.position.z;
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz) || 0.001;
+      if (dist > CAST_MAX_RANGE) return this._deny(player, spellId, 'out_of_range');
+      const dir = { x: dx / dist, y: dy / dist, z: dz / dist };
+      const terrainBlockDist = terrainRaycastBlocked({ ...player.position }, dir, dist);
+      const barrierBlock = this._barrierRayBlock({ ...player.position }, dir, dist);
+      const blockDist = [terrainBlockDist, barrierBlock.distance].filter((d) => d !== null).sort((a, b) => a - b)[0] ?? null;
+      if (blockDist !== null && blockDist < dist) return this._deny(player, spellId, 'no_line_of_sight');
     }
 
     // Death note special: once per life, must have recent damage
@@ -47,39 +76,110 @@ export class SpellSystem {
       if (!target || !target.hasEffect('freeze')) return this._deny(player, spellId, 'target_not_frozen');
     }
 
-    // Set cooldown
-    player.setCooldown(spellId, spell.cooldown);
-
-    // Dispatch cast by type
-    switch (spell.type) {
-      case 'projectile': this._castProjectile(player, spell, aimDir, clientTimestamp); break;
-      case 'beam':       this._castBeam(player, spell, aimDir, clientTimestamp); break;
-      case 'hitscan':    this._castHitscan(player, spell, aimDir, clientTimestamp); break;
-      case 'aoe':        this._castAoe(player, spell, aimDir, clientTimestamp); break;
-      case 'domain':     this._castDomain(player, spell); break;
-      case 'direct':     this._castDirect(player, spell, targetId, clientTimestamp); break;
-      default: break;
+    // Set cooldown — a primed Abyss free cast consumes the buff and skips it entirely
+    if (isAbyssFreeCast) {
+      player.hasAbyssFreeCast = false;
+    } else {
+      player.setCooldown(spellId, spell.cooldown);
     }
 
-    // Notify caster of confirmed cast
+    // Notify caster of confirmed cast (cooldown starts now, even for windup spells)
     this.room.server.send(player, {
       type: S2C.SPELL_CAST,
       spellId,
       slotIndex,
-      cooldownMs: spell.cooldown * 1000,
+      cooldownMs: isAbyssFreeCast ? 0 : spell.cooldown * 1000,
     });
 
+    // Windup spells (aoe already has its own telegraph-then-resolve path via
+    // activatesAt) resolve later instead of dispatching immediately, and can
+    // be cancelled by taking damage if the spell is interruptible. The Abyss's
+    // free cast is also instant — no windup, regardless of the spell.
+    if (spell.windupMs > 0 && spell.type !== 'aoe' && !isAbyssFreeCast) {
+      player.pendingCast = {
+        spellId, spell, aimDir, targetId, clientTimestamp,
+        readyAt: Date.now() + spell.windupMs,
+        interruptible: !!spell.interruptible,
+      };
+      return;
+    }
+
+    this._dispatchCast(player, spell, aimDir, targetId, clientTimestamp);
+  }
+
+  /** Actually executes a validated, non-windup (or windup-resolved) cast. */
+  _dispatchCast(player, spell, aimDir, targetId, clientTimestamp) {
+    // Earth Geologic: any cast builds a defense stack (consumed/reset on taking a hit — see Room.applyDamage)
+    if (player.class === 'earth' && player.unlockedNodes.has('geologic')) {
+      player.geologicStacks = Math.min(4, player.geologicStacks + 1);
+    }
+
+    // Sword Iron Will: casting the Warlord-branch spell grants a brief incoming-damage reduction
+    if (spell.id === 'blade_rain' && player.unlockedNodes.has('iron_will')) {
+      player.ironWillExpiry = Date.now() + 3000;
+    }
+
+    // Dark The Abyss: Null Gaze primes the next cast to be free + instant (see handleCastRequest)
+    if (spell.id === 'null_gaze' && player.unlockedNodes.has('the_abyss')) {
+      player.hasAbyssFreeCast = true;
+    }
+
+    switch (spell.type) {
+      case 'projectile': this._castProjectile(player, spell, aimDir, clientTimestamp); break;
+      case 'beam':       this._castBeam(player, spell, aimDir, clientTimestamp); break;
+      case 'hitscan':
+        if (spell.bounces) this._castChainHitscan(player, spell, aimDir, clientTimestamp);
+        else this._castHitscan(player, spell, aimDir, clientTimestamp);
+        break;
+      case 'aoe':        this._castAoe(player, spell, aimDir, clientTimestamp); break;
+      case 'domain':     this._castDomain(player, spell); break;
+      case 'direct':     this._castDirect(player, spell, targetId, clientTimestamp); break;
+      case 'mobility':   this._castSlotMobility(player, spell); break;
+      default: break;
+    }
+
     // Sword phantom blade: mirror next casts
-    if (player.phantomCasts > 0 && spell.type !== 'domain') {
+    if (player.phantomCasts > 0 && spell.type !== 'domain' && spell.effect !== 'mirror_next_two_casts') {
       player.phantomCasts--;
-      // Re-cast same spell as phantom (no cooldown)
-      this._castProjectile(player, spell, aimDir, clientTimestamp, true);
+      this._recastAsPhantom(player, spell, aimDir, targetId, clientTimestamp);
+    }
+  }
+
+  /** Resolves any windup casts whose delay has elapsed, and clears expired-without-firing ones (e.g. player died mid-cast). */
+  tickPendingCasts(now) {
+    for (const pid of this.room.playerIds) {
+      const player = this.room.server.players.get(pid);
+      if (!player?.pendingCast) continue;
+      if (!player.isAlive) { player.pendingCast = null; continue; }
+      if (now < player.pendingCast.readyAt) continue;
+
+      const { spell, aimDir, targetId, clientTimestamp } = player.pendingCast;
+      player.pendingCast = null;
+      this._dispatchCast(player, spell, aimDir, targetId, clientTimestamp);
+    }
+  }
+
+  /**
+   * Phantom Blade's mirrored re-cast: repeats the ORIGINAL spell's actual
+   * effect (dispatched by its real type), not always a projectile — the
+   * bogus zero-damage "phantom projectile" bug for aoe/hitscan/direct spells.
+   * No cooldown is consumed (the caller already decremented a charge instead).
+   */
+  _recastAsPhantom(player, spell, aimDir, targetId, clientTimestamp) {
+    switch (spell.type) {
+      case 'projectile': this._castProjectile(player, spell, aimDir, clientTimestamp, true); break;
+      case 'hitscan':    this._castHitscan(player, spell, aimDir, clientTimestamp); break;
+      case 'beam':       this._castBeam(player, spell, aimDir, clientTimestamp); break;
+      case 'aoe':        this._castAoe(player, spell, aimDir, clientTimestamp); break;
+      case 'direct':     this._castDirect(player, spell, targetId, clientTimestamp); break;
+      default: break;
     }
   }
 
   handleMobility(player, input) {
     const spellId = MOBILITY_SPELL[player.class];
     if (!spellId) return;
+    if (!input?.mobilityForced && (!player.isAlive || player.hasEffect('stun'))) return;
 
     const spell = getSpell(spellId);
     if (!spell || player.isOnCooldown(spellId)) return;
@@ -102,7 +202,7 @@ export class SpellSystem {
 
   handleBasicAttack(player, aimDir, clientTimestamp) {
     const spellId = BASIC_ATTACK[player.class];
-    if (!spellId || !player.isAlive) return;
+    if (!spellId || !player.isAlive || player.hasEffect('stun')) return;
     const spell = getSpell(spellId);
     if (!spell || player.isOnCooldown(spellId)) return;
 
@@ -112,7 +212,7 @@ export class SpellSystem {
 
   handleMelee(player, aimDir, clientTimestamp) {
     const spellId = MELEE_ATTACK[player.class];
-    if (!spellId || !player.isAlive) return;
+    if (!spellId || !player.isAlive || player.hasEffect('stun')) return;
     const spell = getSpell(spellId);
     if (!spell || player.isOnCooldown(spellId)) return;
 
@@ -238,6 +338,23 @@ export class SpellSystem {
       compTimestamp,
     );
 
+    // Walls/platforms and spell-cast barriers between the caster and the hit
+    // point block it, unless the spell explicitly goes through walls.
+    if (!spell.wallPiercing) {
+      const probeDist = result.hit ? result.distance : CAST_MAX_RANGE;
+      const terrainBlockDist = terrainRaycastBlocked({ ...player.position }, aimDir, probeDist);
+      const barrierBlock = this._barrierRayBlock({ ...player.position }, aimDir, probeDist);
+
+      if (barrierBlock.distance !== null) {
+        this._damageBarrier(barrierBlock.barrier, spell.damage);
+      }
+
+      const blockingDistances = [terrainBlockDist];
+      if (barrierBlock.distance !== null && !spell.destroysBarriers) blockingDistances.push(barrierBlock.distance);
+      const blockDist = blockingDistances.filter((d) => d !== null).sort((a, b) => a - b)[0] ?? null;
+      if (result.hit && blockDist !== null && blockDist < result.distance) result.hit = false;
+    }
+
     // Broadcast visual (everyone sees the beam regardless)
     const flashId = uuid();
     this.room.effects.set(flashId, {
@@ -254,11 +371,27 @@ export class SpellSystem {
     });
 
     if (result.hit) {
-      const dmgMult = result.isHeadshot ? 1.5 : 0.85;
-      const dmg = this.room.applyDamage(result.playerId, Math.round(spell.damage * dmgMult), player.id, spell.id);
       const target = this.room.server.players.get(result.playerId);
+
+      // Parry: reflect the shot back at its caster instead of landing.
+      if (target?.parryActive && Date.now() < target.parryExpiry && !spell.bypassesParry) {
+        target.parryActive = false;
+        target.lastParryTime = Date.now();
+        target.lastParriedBy = player.id;
+        this._onParrySuccess(target);
+        this.room.applyDamage(player.id, spell.damage, target.id, spell.id);
+        return null;
+      }
+
+      let dmgMult = result.isHeadshot ? 1.5 : 0.85;
+      // Divine Judgement: "instant shatter on frozen" — a 0-duration freeze is a
+      // no-op status, so the payoff is a burst multiplier against an already-frozen target.
+      if (spell.statusEffect === 'freeze' && spell.statusDuration === 0 && target?.hasEffect('freeze')) {
+        dmgMult *= 2.5;
+      }
+      const dmg = this.room.applyDamage(result.playerId, Math.round(spell.damage * dmgMult), player.id, spell.id);
       if (target && spell.statusEffect) {
-        target.applyEffect(spell.statusEffect, spell.statusDuration);
+        target.applyEffect(spell.statusEffect, spell.statusDuration, 1, player.id);
       }
       if (result.isHatHit) this.room.progressionSystem.applyHatBuff(player.id, result.targetLevel);
 
@@ -269,6 +402,70 @@ export class SpellSystem {
         damage: dmg,
         isHeadshot: result.isHeadshot,
       });
+
+      return result.playerId;
+    }
+
+    return null;
+  }
+
+  // ── Chain hitscan (Chain Lightning) ─────────────────────────────────────
+  // The first hit is a normal aimed hitscan (lag comp, terrain/barrier
+  // blocking, parry all apply); each additional bounce jumps to the nearest
+  // not-yet-hit living enemy within range of the last hit, proximity-based
+  // rather than re-aimed — the caster aims the first shot, not the chain.
+
+  _castChainHitscan(player, spell, aimDir, clientTimestamp) {
+    const firstTargetId = this._castHitscan(player, spell, aimDir, clientTimestamp);
+    if (!firstTargetId) return;
+
+    const hitIds = new Set([player.id, firstTargetId]);
+    let fromPos = this.room.server.players.get(firstTargetId)?.position;
+    const remainingBounces = Math.max(0, (spell.bounces ?? 1) - 1);
+    const maxChainRange = 12;
+
+    for (let i = 0; i < remainingBounces && fromPos; i++) {
+      let nearestId = null, nearestDist = Infinity;
+      for (const pid of this.room.playerIds) {
+        if (hitIds.has(pid)) continue;
+        const p = this.room.server.players.get(pid);
+        if (!p || !p.isAlive) continue;
+        const dx = p.position.x - fromPos.x, dz = p.position.z - fromPos.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        if (dist < maxChainRange && dist < nearestDist) { nearestDist = dist; nearestId = pid; }
+      }
+      if (!nearestId) break;
+
+      hitIds.add(nearestId);
+      const next = this.room.server.players.get(nearestId);
+      const dmg = this.room.applyDamage(nearestId, spell.damage, player.id, spell.id);
+      if (spell.statusEffect) next.applyEffect(spell.statusEffect, spell.statusDuration, 1, player.id);
+
+      this.room.server.send(player, {
+        type: S2C.HIT_CONFIRMED,
+        targetId: nearestId,
+        spellId: spell.id,
+        damage: dmg,
+        isHeadshot: false,
+      });
+
+      const dx = next.position.x - fromPos.x, dz = next.position.z - fromPos.z;
+      const segLen = Math.sqrt(dx * dx + dz * dz) || 1;
+      const flashId = uuid();
+      this.room.effects.set(flashId, {
+        id: flashId,
+        type: 'hitscan_flash',
+        spellId: spell.id,
+        ownerId: player.id,
+        origin: { ...fromPos },
+        direction: { x: dx / segLen, y: 0, z: dz / segLen },
+        color: spell.color,
+        glowColor: spell.glowColor,
+        createdAt: Date.now(),
+        expiresAt: Date.now() + 500,
+      });
+
+      fromPos = next.position;
     }
   }
 
@@ -295,13 +492,18 @@ export class SpellSystem {
   // ── AoE ───────────────────────────────────────────────────────────────────
 
   _castAoe(player, spell, aimDir, clientTimestamp) {
+    if (spell.isBarrier) {
+      this._createBarrier(player, spell, aimDir);
+      return;
+    }
+
     const effectId = uuid();
-    // Cast at aim target (raycast from player)
-    const targetPos = {
-      x: player.position.x + aimDir.x * 12,
-      y: 0,
-      z: player.position.z + aimDir.z * 12,
-    };
+    // Self-centered spells (Blood Nova) land on the caster; line-shaped spells
+    // (Fissure) start at the caster's feet and extend out via direction*length;
+    // everything else casts at a fixed distance out along the aim direction.
+    const targetPos = (spell.selfCast || spell.length)
+      ? { x: player.position.x, y: 0, z: player.position.z }
+      : { x: player.position.x + aimDir.x * 12, y: 0, z: player.position.z + aimDir.z * 12 };
 
     const effect = {
       id: effectId,
@@ -313,6 +515,12 @@ export class SpellSystem {
       damage: spell.damage,
       statusEffect: spell.statusEffect,
       statusDuration: spell.statusDuration,
+      lifesteal: spell.lifesteal ?? 0,
+      // Line-shaped aoe (Fissure): a capsule along the caster's aim direction
+      // instead of a circle centered on targetPos.
+      shape: spell.length ? 'line' : 'point',
+      direction: spell.length ? { x: aimDir.x, z: aimDir.z } : null,
+      length: spell.length ?? 0,
       windupMs: spell.windupMs ?? 0,
       duration: spell.duration ?? 0,
       startedAt: Date.now(),
@@ -323,6 +531,70 @@ export class SpellSystem {
     };
 
     this.room.effects.set(effectId, effect);
+
+    // Fire Backdraft's trigger window: Immolate coats the caster in fire for its duration.
+    if (spell.id === 'immolate') {
+      player.immolateActiveUntil = Date.now() + (spell.duration ?? 5) * 1000;
+    }
+  }
+
+  // ── Barriers (Ice Wall, Rock Wall) ──────────────────────────────────────
+
+  _createBarrier(player, spell, aimDir) {
+    const id = uuid();
+    const distance = 4;
+    const height = spell.id === 'rock_wall' ? 4 : 3.5;
+    const width = 6;
+    // Earth Bulwark Stance: your own barriers are tougher
+    const bulwark = player.unlockedNodes.has('bulwark_stance') ? 1.5 : 1;
+
+    this.room.barriers.set(id, {
+      id,
+      ownerId: player.id,
+      spellId: spell.id,
+      position: {
+        x: player.position.x + aimDir.x * distance,
+        y: height / 2,
+        z: player.position.z + aimDir.z * distance,
+      },
+      width,
+      height,
+      health: spell.barrierHealth != null ? Math.round(spell.barrierHealth * bulwark) : null,
+      breaksRemaining: spell.requiresBreaks ?? null,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + (spell.duration ?? 10) * 1000,
+      active: true,
+    });
+  }
+
+  /** Chips a barrier's health/break-count; deactivates it once depleted. */
+  _damageBarrier(barrier, damage) {
+    if (!barrier || !barrier.active) return;
+    if (barrier.breaksRemaining != null) {
+      barrier.breaksRemaining -= 1;
+      if (barrier.breaksRemaining <= 0) barrier.active = false;
+    } else if (barrier.health != null) {
+      barrier.health -= damage;
+      if (barrier.health <= 0) barrier.active = false;
+    }
+  }
+
+  /** Nearest active barrier a ray hits within maxDist, or {distance:null} if none. */
+  _barrierRayBlock(origin, dir, maxDist) {
+    let distance = null;
+    let barrier = null;
+    for (const [, b] of this.room.barriers) {
+      if (!b.active) continue;
+      const t = rayIntersectsCylinder(origin, dir, {
+        x: b.position.x, z: b.position.z, radius: b.width / 2,
+        baseY: b.position.y - b.height / 2, height: b.height,
+      });
+      if (t !== null && t <= maxDist && (distance === null || t < distance)) {
+        distance = t;
+        barrier = b;
+      }
+    }
+    return { distance, barrier };
   }
 
   // ── Domain ────────────────────────────────────────────────────────────────
@@ -338,7 +610,7 @@ export class SpellSystem {
       ownerId: player.id,
       startedAt: now,
       activatesAt: now + (config?.telegraph ?? 0),
-      expiresAt: now + (config?.duration ?? 4) * 1000,
+      expiresAt: now + (config?.duration ?? 4000),
       active: true,
     };
 
@@ -353,11 +625,14 @@ export class SpellSystem {
   // ── Direct ────────────────────────────────────────────────────────────────
 
   _castDirect(player, spell, targetId, clientTimestamp) {
-    const target = this.room.server.players.get(targetId);
-    if (!target || !target.isAlive) return;
+    // Self-cast direct spells (Parry) have no target at all — only fetch/require
+    // one for spells that actually declare requiresTarget.
+    const target = spell.requiresTarget ? this.room.server.players.get(targetId) : null;
+    if (spell.requiresTarget && (!target || !target.isAlive)) return;
 
     if (spell.id === 'death_note') {
-      // Windup is already handled; deal damage immediately (server already validated)
+      // The windup (server-enforced via pendingCast) already elapsed by the time
+      // we get here — deal damage immediately.
       this.room.applyDamage(targetId, spell.damage, player.id, spell.id);
       return;
     }
@@ -365,17 +640,27 @@ export class SpellSystem {
     if (spell.id === 'shatter') {
       target.removeEffect('freeze');
       this.room.applyDamage(targetId, spell.damage, player.id, spell.id);
+      // Ice Glass Cannon: shattering a frozen target resets Glacial Spike's cooldown
+      if (player.unlockedNodes.has('glass_cannon')) player.cooldowns.delete('glacial_spike');
       return;
     }
 
     if (spell.id === 'petrify') {
-      target.applyEffect('petrify', spell.statusDuration);
+      target.applyEffect('petrify', spell.statusDuration, 1, player.id);
       return;
     }
 
     // Phantom blade: set up mirroring
     if (spell.id === 'phantom_blade') {
       player.phantomCasts = player.unlockedNodes.has('razors_edge') ? 3 : 2;
+      return;
+    }
+
+    // Parry: opens a short self-buff window (no target) — reflection is
+    // resolved where hits are, see _castHitscan / tickProjectiles.
+    if (spell.id === 'parry') {
+      player.parryActive = true;
+      player.parryExpiry = Date.now() + (spell.duration ?? 0.6) * 1000;
       return;
     }
 
@@ -397,9 +682,45 @@ export class SpellSystem {
       return;
     }
 
-    // Generic direct damage
+    // Generic direct damage — only reachable for requiresTarget spells with no
+    // special branch above; self-cast spells with their own behavior (Parry)
+    // get an explicit branch instead of falling through here.
+    if (!target) return;
     const dmg = this.room.applyDamage(targetId, spell.damage, player.id, spell.id);
-    if (spell.statusEffect) target.applyEffect(spell.statusEffect, spell.statusDuration);
+    if (spell.statusEffect) target.applyEffect(spell.statusEffect, spell.statusDuration, 1, player.id);
+  }
+
+  /** Sword Counter: a successful parry resets Iron Edge and primes the next one to hit doubled. */
+  _onParrySuccess(parrier) {
+    if (!parrier.unlockedNodes.has('counter')) return;
+    parrier.cooldowns.delete('iron_edge');
+    parrier.empoweredSlashReady = true;
+  }
+
+  // ── Slot-equipped mobility spells (type:'mobility' in an equip slot, as
+  // opposed to the one per-class spell bound to Shift — see handleMobility) ──
+
+  _castSlotMobility(player, spell) {
+    if (spell.id === 'riposte') return this._castRiposte(player, spell);
+  }
+
+  _castRiposte(player, spell) {
+    const withinWindow = !spell.requiresParry || (player.lastParryTime && (Date.now() - player.lastParryTime) < 2000);
+    if (!withinWindow) return;
+
+    const target = player.lastParriedBy ? this.room.server.players.get(player.lastParriedBy) : null;
+    if (!target || !target.isAlive) return;
+
+    if (spell.teleportToTarget) {
+      const dx = player.position.x - target.position.x;
+      const dz = player.position.z - target.position.z;
+      const dist = Math.sqrt(dx * dx + dz * dz) || 1;
+      player.position.x = target.position.x + (dx / dist) * 1.5;
+      player.position.z = target.position.z + (dz / dist) * 1.5;
+    }
+
+    this.room.applyDamage(target.id, spell.damage, player.id, spell.id);
+    player.lastParryTime = 0; // consume the window — one riposte per parry
   }
 
   // ── Tick projectiles ──────────────────────────────────────────────────────
@@ -413,7 +734,26 @@ export class SpellSystem {
         continue;
       }
 
+      // Domain effects: Inferno Domain accelerates projectiles, Event Horizon pulls them center-ward
+      const activeDomain = this.room.getActiveDomain();
+      if (activeDomain && now >= activeDomain.activatesAt) {
+        const domainConfig = DOMAIN_CONFIGS[activeDomain.spellId];
+        if (activeDomain.spellId === 'inferno_domain' && domainConfig) {
+          const accel = 1 + ((domainConfig.accelerationFactor ?? 1) - 1) * dt;
+          proj.velocity.x *= accel; proj.velocity.y *= accel; proj.velocity.z *= accel;
+        } else if (activeDomain.spellId === 'event_horizon' && domainConfig) {
+          const pdx = -proj.position.x, pdz = -proj.position.z;
+          const pdist = Math.sqrt(pdx * pdx + pdz * pdz);
+          if (pdist > 0.5) {
+            const pull = (domainConfig.pullForce ?? 0) * dt;
+            proj.velocity.x += (pdx / pdist) * pull;
+            proj.velocity.z += (pdz / pdist) * pull;
+          }
+        }
+      }
+
       // Move projectile
+      const prevPos = { x: proj.position.x, y: proj.position.y, z: proj.position.z };
       proj.position.x += proj.velocity.x * dt;
       proj.position.y += proj.velocity.y * dt;
       proj.position.z += proj.velocity.z * dt;
@@ -428,17 +768,29 @@ export class SpellSystem {
         continue;
       }
 
+      // Terrain collision — a wall/platform crossed this tick's movement segment
+      const projSpell = getSpell(proj.spellId);
+      if (!projSpell?.wallPiercing) {
+        const segX = proj.position.x - prevPos.x, segY = proj.position.y - prevPos.y, segZ = proj.position.z - prevPos.z;
+        const segLen = Math.sqrt(segX * segX + segY * segY + segZ * segZ);
+        if (segLen > 1e-6) {
+          const segDir = { x: segX / segLen, y: segY / segLen, z: segZ / segLen };
+          const blockDist = terrainRaycastBlocked(prevPos, segDir, segLen);
+          if (blockDist !== null) {
+            toRemove.push(id);
+            continue;
+          }
+        }
+      }
+
       // Barrier collision
       let hitBarrier = false;
       for (const [, barrier] of this.room.barriers) {
         if (barrier.active && this._projectileHitsBarrier(proj, barrier)) {
-          const spell = getSpell(proj.spellId);
-          if (!spell?.destroysBarriers) {
+          this._damageBarrier(barrier, proj.damage);
+          if (!projSpell?.destroysBarriers) {
             toRemove.push(id);
             hitBarrier = true;
-          } else {
-            barrier.health -= proj.damage;
-            if (barrier.health <= 0) barrier.active = false;
           }
           break;
         }
@@ -470,20 +822,35 @@ export class SpellSystem {
         const target = this.room.server.players.get(playerId);
         if (!target || !target.isAlive) continue;
 
+        // Parry: send the projectile back the way it came, now owned by the parrier.
+        if (target.parryActive && Date.now() < target.parryExpiry && !projSpell?.bypassesParry) {
+          target.parryActive = false;
+          target.lastParryTime = Date.now();
+          target.lastParriedBy = proj.ownerId;
+          this._onParrySuccess(target);
+          proj.velocity.x *= -1;
+          proj.velocity.y *= -1;
+          proj.velocity.z *= -1;
+          proj.ownerId = playerId;
+          continue;
+        }
+
         const dmgMult = isHeadshot ? 1.5 : 0.85;
         const dmg = this.room.applyDamage(playerId, Math.round(proj.damage * dmgMult), proj.ownerId, proj.spellId);
         if (proj.statusEffect && target) {
-          target.applyEffect(proj.statusEffect, proj.statusDuration);
+          target.applyEffect(proj.statusEffect, proj.statusDuration, 1, proj.ownerId);
         }
         if (isHatHit) this.room.progressionSystem.applyHatBuff(proj.ownerId, targetLevel);
 
         // Lifesteal
         const owner = this.room.server.players.get(proj.ownerId);
-        if (owner) {
-          const spell = getSpell(proj.spellId);
-          if (spell?.lifesteal) {
-            owner.health = Math.min(owner.maxHealth, owner.health + Math.round(dmg * spell.lifesteal));
-          }
+        if (owner && projSpell?.lifesteal) {
+          owner.health = Math.min(owner.maxHealth, owner.health + Math.round(dmg * projSpell.lifesteal));
+        }
+
+        // Void Bloom: onImpact spawns a lingering slow/damage zone at the hit point
+        if (projSpell?.onImpact === 'void_tendrils') {
+          this._spawnVoidTendrils({ ...proj.position }, proj.ownerId);
         }
 
         this.room.server.send(owner, {
@@ -544,7 +911,17 @@ export class SpellSystem {
           effect.nextTick = now + effect.tickInterval;
           const target = this.room.server.players.get(effect.targetId);
           if (target && target.isAlive) {
-            this.room.applyDamage(effect.targetId, effect.damage, effect.ownerId, 'amaterasu');
+            const dealt = this.room.applyDamage(effect.targetId, effect.damage, effect.ownerId, 'amaterasu');
+            const owner = this.room.server.players.get(effect.ownerId);
+            if (owner && dealt > 0) {
+              this.room.server.send(owner, {
+                type: S2C.HIT_CONFIRMED,
+                targetId: effect.targetId,
+                spellId: 'amaterasu',
+                damage: dealt,
+                isHeadshot: false,
+              });
+            }
           } else {
             toRemove.push(id);
           }
@@ -554,40 +931,204 @@ export class SpellSystem {
 
     for (const id of toRemove) this.room.effects.delete(id);
 
+    // Tick barriers — remove once expired or broken
+    const barrierToRemove = [];
+    for (const [id, barrier] of this.room.barriers) {
+      if (!barrier.active || now > barrier.expiresAt) barrierToRemove.push(id);
+    }
+    for (const id of barrierToRemove) this.room.barriers.delete(id);
+
     // Tick domains
     const domainToRemove = [];
     for (const [id, domain] of this.room.domains) {
       if (now > domain.expiresAt) {
         domainToRemove.push(id);
         this.room.server.broadcast(this.room.id, { type: S2C.DOMAIN_END, domainId: id });
+        this._onDomainEnd(domain);
+      } else {
+        this._tickDomainEffects(domain, now);
       }
     }
     for (const id of domainToRemove) this.room.domains.delete(id);
   }
 
+  /** Passives that trigger when a domain expires: Ice Hypothermia, Earth Tectonic. */
+  _onDomainEnd(domain) {
+    const owner = this.room.server.players.get(domain.ownerId);
+    if (!owner) return;
+
+    if (domain.spellId === 'absolute_zero' && owner.unlockedNodes.has('hypothermia')) {
+      for (const pid of this.room.playerIds) {
+        if (pid === domain.ownerId) continue;
+        const p = this.room.server.players.get(pid);
+        if (p?.isAlive) p.applyEffect('slow', 2000, 1, domain.ownerId);
+      }
+    }
+
+    if (domain.spellId === 'terra_domain' && owner.unlockedNodes.has('tectonic')) {
+      owner.bedrock = true;
+      owner.bedrockIdleSince = Date.now() - 2000;
+    }
+  }
+
+  /** Per-domain effects that aren't just a movement/projectile multiplier — currently just Terra Domain's periodic stone spires. */
+  _tickDomainEffects(domain, now) {
+    if (now < domain.activatesAt) return;
+    const config = DOMAIN_CONFIGS[domain.spellId];
+    if (config?.effect !== 'stone_spires') return;
+
+    if (!domain.nextSpireAt) domain.nextSpireAt = now;
+    if (now < domain.nextSpireAt) return;
+
+    const interval = Math.max(200, (domain.expiresAt - domain.activatesAt) / (config.spireCount ?? 10));
+    domain.nextSpireAt = now + interval;
+
+    const angle = Math.random() * Math.PI * 2;
+    const dist = Math.random() * (ARENA_RADIUS - 4);
+    this._spawnSpire(domain.ownerId, { x: Math.cos(angle) * dist, y: 0, z: Math.sin(angle) * dist });
+  }
+
+  /** Ice Permafrost: ground the caster walks over briefly slows pursuers (owner is immune, same as any aoe owner-skip). */
+  _spawnPermafrostTrail(player) {
+    const id = uuid();
+    this.room.effects.set(id, {
+      id,
+      type: 'aoe',
+      spellId: 'permafrost_trail',
+      ownerId: player.id,
+      position: { x: player.position.x, y: 0, z: player.position.z },
+      radius: 1.5,
+      damage: 0,
+      statusEffect: 'slow',
+      statusDuration: 800,
+      lifesteal: 0,
+      shape: 'point',
+      direction: null,
+      length: 0,
+      windupMs: 0,
+      duration: 1,
+      startedAt: Date.now(),
+      activatesAt: Date.now(),
+      expiresAt: Date.now() + 1000,
+      triggered: false,
+      active: true,
+    });
+  }
+
+  /** Void Bloom's onImpact: a lingering zone of minor damage + slow at the impact point. */
+  _spawnVoidTendrils(position, ownerId) {
+    const id = uuid();
+    this.room.effects.set(id, {
+      id,
+      type: 'aoe',
+      spellId: 'void_tendrils',
+      ownerId,
+      position: { x: position.x, y: 0, z: position.z },
+      radius: 3.0,
+      damage: 8,
+      statusEffect: 'slow',
+      statusDuration: 1500,
+      windupMs: 0,
+      duration: 3,
+      startedAt: Date.now(),
+      activatesAt: Date.now(),
+      expiresAt: Date.now() + 3000,
+      triggered: false,
+      active: true,
+    });
+  }
+
+  /** A single Terra Domain stone spire: brief telegraph, then a burst of damage. The owner is immune (see _resolveAoe's owner skip). */
+  _spawnSpire(ownerId, position) {
+    const id = uuid();
+    const telegraphMs = 500;
+    this.room.effects.set(id, {
+      id,
+      type: 'aoe',
+      spellId: 'terra_domain_spire',
+      ownerId,
+      position,
+      radius: 2.0,
+      damage: 35,
+      statusEffect: 'stun',
+      statusDuration: 400,
+      windupMs: telegraphMs,
+      duration: 0,
+      startedAt: Date.now(),
+      activatesAt: Date.now() + telegraphMs,
+      expiresAt: Date.now() + telegraphMs + 500,
+      triggered: false,
+      active: true,
+    });
+  }
+
   _resolveAoe(effect, now, isLinger = false) {
+    let totalDealt = 0;
+    const owner = this.room.server.players.get(effect.ownerId);
+
     for (const pid of this.room.playerIds) {
       if (pid === effect.ownerId && !isLinger) continue;
       const player = this.room.server.players.get(pid);
       if (!player || !player.isAlive) continue;
 
-      const dx = player.position.x - effect.position.x;
-      const dz = player.position.z - effect.position.z;
-      const dist = Math.sqrt(dx * dx + dz * dz);
-
-      if (dist < effect.radius) {
+      if (this._effectContainsPoint(effect, player.position)) {
         const dmg = isLinger ? Math.round(effect.damage * 0.3) : effect.damage;
-        this.room.applyDamage(pid, dmg, effect.ownerId, effect.spellId);
+        const dealt = this.room.applyDamage(pid, dmg, effect.ownerId, effect.spellId);
+        totalDealt += dealt;
         if (effect.statusEffect) {
-          player.applyEffect(effect.statusEffect, effect.statusDuration);
+          player.applyEffect(effect.statusEffect, effect.statusDuration, 1, effect.ownerId);
+        }
+        if (owner && dealt > 0) {
+          this.room.server.send(owner, {
+            type: S2C.HIT_CONFIRMED,
+            targetId: pid,
+            spellId: effect.spellId,
+            damage: dealt,
+            isHeadshot: false,
+          });
         }
       }
     }
+
+    // Blood Nova and similar: heal the caster for a share of the total damage dealt.
+    if (effect.lifesteal && totalDealt > 0) {
+      const owner = this.room.server.players.get(effect.ownerId);
+      if (owner) owner.health = Math.min(owner.maxHealth, owner.health + Math.round(totalDealt * effect.lifesteal));
+    }
+  }
+
+  /** True if `pos` (XZ) falls within an aoe effect's footprint — a circle, or a capsule along `direction*length` for line-shaped effects (Fissure). */
+  _effectContainsPoint(effect, pos) {
+    if (effect.shape === 'line' && effect.direction && effect.length) {
+      const segX = effect.direction.x * effect.length;
+      const segZ = effect.direction.z * effect.length;
+      const segLenSq = segX * segX + segZ * segZ || 1;
+      const dx = pos.x - effect.position.x, dz = pos.z - effect.position.z;
+      const t = Math.max(0, Math.min(1, (dx * segX + dz * segZ) / segLenSq));
+      const closestX = effect.position.x + segX * t;
+      const closestZ = effect.position.z + segZ * t;
+      const ddx = pos.x - closestX, ddz = pos.z - closestZ;
+      return Math.sqrt(ddx * ddx + ddz * ddz) < effect.radius;
+    }
+
+    const dx = pos.x - effect.position.x, dz = pos.z - effect.position.z;
+    return Math.sqrt(dx * dx + dz * dz) < effect.radius;
   }
 
   _resolveBeam(effect, now, dt) {
     const owner = this.room.server.players.get(effect.ownerId);
     if (!owner) return;
+
+    const spell = getSpell(effect.spellId);
+    let blockDist = null;
+    if (!spell?.wallPiercing) {
+      const terrainBlockDist = terrainRaycastBlocked({ ...owner.position }, effect.direction, 20);
+      const barrierBlock = this._barrierRayBlock({ ...owner.position }, effect.direction, 20);
+      if (barrierBlock.distance !== null) this._damageBarrier(barrierBlock.barrier, Math.round(effect.damage * dt));
+      const candidates = [terrainBlockDist];
+      if (barrierBlock.distance !== null && !spell?.destroysBarriers) candidates.push(barrierBlock.distance);
+      blockDist = candidates.filter((d) => d !== null).sort((a, b) => a - b)[0] ?? null;
+    }
 
     // Cast ray from owner in beam direction
     for (const pid of this.room.playerIds) {
@@ -603,6 +1144,7 @@ export class SpellSystem {
       };
       const dist = Math.sqrt(toPlayer.x * toPlayer.x + toPlayer.z * toPlayer.z);
       if (dist > 20) continue;
+      if (blockDist !== null && dist > blockDist) continue;
 
       const dot = (toPlayer.x / dist) * effect.direction.x + (toPlayer.z / dist) * effect.direction.z;
       if (dot < 0.9) continue; // ~26 degree cone
@@ -614,7 +1156,7 @@ export class SpellSystem {
         owner.health = Math.min(owner.maxHealth, owner.health + Math.round(actual * effect.lifesteal));
       }
       if (effect.statusEffect) {
-        player.applyEffect(effect.statusEffect, effect.statusDuration);
+        player.applyEffect(effect.statusEffect, effect.statusDuration, 1, effect.ownerId);
       }
     }
   }
@@ -696,7 +1238,7 @@ export class SpellSystem {
     const duration = player.unlockedNodes.has('phase_duration_2') ? 3000 : 2000;
     player.isPhasing = true;
     player.phaseExpiry = Date.now() + duration;
-    player.applyEffect('phase', duration);
+    player.applyEffect('phase', duration, 1, player.id);
     // Give a burst of velocity in the movement direction so phase slip feels like a dash
     const dir = this._getDashDir(player, input);
     const burstSpeed = 14;
@@ -748,6 +1290,34 @@ export class SpellSystem {
       triggered: false,
       active: true,
     });
+
+    // Earth The Deep: Stone Launch auto-triggers a small Fissure in the direction the player is facing
+    if (player.unlockedNodes.has('the_deep')) {
+      const dir = { x: -Math.sin(player.yaw), z: -Math.cos(player.yaw) };
+      const fissureId = uuid();
+      this.room.effects.set(fissureId, {
+        id: fissureId,
+        type: 'aoe',
+        spellId: 'the_deep_fissure',
+        ownerId: player.id,
+        position: { x: player.position.x, y: 0, z: player.position.z },
+        radius: 1.0,
+        damage: 25,
+        statusEffect: 'airborne',
+        statusDuration: 800,
+        lifesteal: 0,
+        shape: 'line',
+        direction: dir,
+        length: 6,
+        windupMs: 0,
+        duration: 0,
+        startedAt: Date.now(),
+        activatesAt: Date.now(),
+        expiresAt: Date.now() + 400,
+        triggered: false,
+        active: true,
+      });
+    }
   }
 
   triggerEffect(effectType, position, ownerId) {

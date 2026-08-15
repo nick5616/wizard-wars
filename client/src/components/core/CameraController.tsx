@@ -16,7 +16,7 @@ import type { Vec3, CastInput } from '../../types/game.types';
 import { INPUT_FLAGS } from 'shared/events';
 import type { WebSocketClient } from '../../networking/WebSocketClient';
 import { C2S } from 'shared/events';
-import { PLAYER_HEIGHT, CAST_MAX_RANGE } from 'shared/constants';
+import { PLAYER_HEIGHT, CAST_MAX_RANGE, ARENA_RADIUS } from 'shared/constants';
 import { MOBILITY_SPELL, BASIC_ATTACK, MELEE_ATTACK, getSpell } from 'shared/spells';
 import { getTargetObjects } from '../../networking/targetRegistry';
 import { audioManager } from '../../audio/AudioManager';
@@ -100,6 +100,16 @@ export function CameraController({ ws, prediction }: Props) {
 
     // While any menu is open: freeze all game input (no look, no move, no cast)
     if (menuOpen) return;
+
+    // Experiment Lab: static overhead view of the whole arena -- decoupled
+    // entirely from the local player's body/input, which just stays wherever
+    // it was (godmode, so nothing depends on it moving) while this is on.
+    if (useGameStore.getState().birdsEyeView) {
+      camera.position.set(0, ARENA_RADIUS * 1.8, ARENA_RADIUS * 0.9);
+      camera.lookAt(0, 0, 0);
+      return;
+    }
+
     const { localPlayerId } = useNetworkStore.getState();
 
     // On spawn/respawn: snap camera to the server-provided position so projectiles
@@ -139,7 +149,10 @@ export function CameraController({ ws, prediction }: Props) {
     if (movement.jumping)  flags |= INPUT_FLAGS.JUMP;
     if (movement.mobility) flags |= INPUT_FLAGS.MOBILITY;
 
-    const result = prediction.predict(posRef.current, velRef.current, flags, yawRef.current, dt);
+    const barrierCircles = Object.values(useGameStore.getState().barriers)
+      .filter((b) => b.active)
+      .map((b) => ({ x: b.position.x, z: b.position.z, radius: b.width / 2 }));
+    const result = prediction.predict(posRef.current, velRef.current, flags, yawRef.current, dt, barrierCircles);
     posRef.current = result.pos;
     velRef.current = result.vel;
 

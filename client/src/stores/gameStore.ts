@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type {
-  PlayerState, ProjectileState, EffectState, DomainState,
+  PlayerState, ProjectileState, EffectState, DomainState, BarrierState,
   Vec3, KillFeedEntry, WizardClass,
 } from '../types/game.types';
 
@@ -62,6 +62,7 @@ interface GameState {
   projectiles: Record<string, ProjectileState>;
   effects: Record<string, EffectState>;
   domains: Record<string, DomainState>;
+  barriers: Record<string, BarrierState>;
   serverTick: number;
   lastServerTimestamp: number;
 
@@ -82,7 +83,7 @@ interface GameState {
 
   // Setters
   setPhase: (p: GameState['phase']) => void;
-  applyTick: (players: Record<string, PlayerState>, projectiles: Record<string, ProjectileState>, effects: Record<string, EffectState>, domains: Record<string, DomainState>, tick: number, ts: number, localId: string) => void;
+  applyTick: (players: Record<string, PlayerState>, projectiles: Record<string, ProjectileState>, effects: Record<string, EffectState>, domains: Record<string, DomainState>, barriers: Record<string, BarrierState>, tick: number, ts: number, localId: string) => void;
   setLocalClass: (c: WizardClass) => void;
   setActiveSlot: (i: number) => void;
   setLocalCooldown: (spellId: string, ms: number) => void;
@@ -104,6 +105,11 @@ interface GameState {
   // Dev tools
   debugMode: boolean;
   setDebugMode: (v: boolean) => void;
+
+  // Experiment Lab: locks the camera to a static overhead view of the whole
+  // arena instead of following the local player.
+  birdsEyeView: boolean;
+  setBirdsEyeView: (v: boolean) => void;
 }
 
 const defaultLocal: LocalPlayerState = {
@@ -130,6 +136,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   projectiles: {},
   effects: {},
   domains: {},
+  barriers: {},
   serverTick: 0,
   lastServerTimestamp: 0,
   local: { ...defaultLocal },
@@ -141,16 +148,18 @@ export const useGameStore = create<GameState>((set, get) => ({
   damageNumbers: [],
   menuOpen: false,
   debugMode: false,
+  birdsEyeView: false,
 
   setPhase: (phase) => set({ phase }),
 
-  applyTick: (players, projectiles, effects, domains, tick, ts, localId) => {
+  applyTick: (players, projectiles, effects, domains, barriers, tick, ts, localId) => {
     const localPlayer = players[localId];
     set((s) => ({
       players,
       projectiles,
       effects,
       domains,
+      barriers,
       serverTick: tick,
       lastServerTimestamp: ts,
       local: localPlayer ? {
@@ -242,4 +251,5 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   setMenuOpen: (v) => set({ menuOpen: v }),
   setDebugMode: (v) => set({ debugMode: v }),
+  setBirdsEyeView: (v) => set({ birdsEyeView: v }),
 }));

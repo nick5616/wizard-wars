@@ -14,6 +14,15 @@ const HAT_CONE_RADIUS = 0.28;
 const HAT_CONE_HEIGHT = 0.5;
 const HAT_BASE_LOCAL_Y = 1.95;
 
+/** Multiplies a hex color's RGB channels toward black — used to visually mute bots. */
+function darken(hex: string, factor: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  const r = Math.round(((n >> 16) & 0xff) * factor);
+  const g = Math.round(((n >> 8) & 0xff) * factor);
+  const b = Math.round((n & 0xff) * factor);
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
+}
+
 const CLASS_COLORS: Record<string, string> = {
   fire: '#ff4500',
   ice: '#a0d8ff',
@@ -34,7 +43,8 @@ export function RemotePlayer({ playerId, interpolation, serverNow, initialState 
   const groupRef = useRef<THREE.Group>(null);
   const healthBarRef = useRef<THREE.Mesh>(null);
 
-  const color = CLASS_COLORS[initialState.class ?? 'default'] ?? CLASS_COLORS.default;
+  const baseColor = CLASS_COLORS[initialState.class ?? 'default'] ?? CLASS_COLORS.default;
+  const color = initialState.isBot ? darken(baseColor, 0.55) : baseColor;
   const hatScale = hatScaleForLevel(initialState.level ?? 1);
 
   useEffect(() => {
@@ -88,6 +98,14 @@ export function RemotePlayer({ playerId, interpolation, serverNow, initialState 
 
       {/* Class glow */}
       <pointLight position={[0, 1.5, 0]} intensity={0.5} distance={3} color={color} />
+
+      {/* Bot marker: a small dark ring at the feet — desaturated color alone reads as "off" at a distance, this makes it explicit */}
+      {initialState.isBot && (
+        <mesh position={[0, 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+          <ringGeometry args={[0.4, 0.5, 16]} />
+          <meshBasicMaterial color="#333333" transparent opacity={0.8} depthTest={false} />
+        </mesh>
+      )}
 
       {/* Health bar background */}
       <mesh position={[0, 2.4, 0]} rotation={[0, 0, 0]}>

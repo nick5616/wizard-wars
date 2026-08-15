@@ -36,7 +36,7 @@ export const FIRE_SPELLS = {
   }),
   immolate: def({
     id: 'immolate', name: 'Immolate', school: 'fire', tier: 4, class: 'fire',
-    type: 'aoe', damage: 20, cooldown: 1.0, radius: 1.5, duration: 5.0,
+    type: 'aoe', damage: 20, cooldown: 1.0, radius: 1.5, duration: 5.0, selfCast: true,
     statusEffect: 'burn', statusDuration: 1000,
     color: '#ff4500', glowColor: '#ff8c00',
   }),
@@ -71,7 +71,7 @@ export const FIRE_SPELLS = {
   }),
   magma_dash: def({
     id: 'magma_dash', name: 'Magma Dash', school: 'fire', tier: 1, class: 'fire',
-    type: 'mobility', damage: 15, cooldown: 5.0, speed: 25, duration: 0.25,
+    type: 'mobility', damage: 15, cooldown: 2.5, speed: 25, duration: 0.25,
     color: '#ff4500', glowColor: '#ff6b2b',
   }),
   spark_shot: def({
@@ -141,7 +141,7 @@ export const ICE_SPELLS = {
   }),
   glacier_step: def({
     id: 'glacier_step', name: 'Glacier Step', school: 'ice', tier: 1, class: 'ice',
-    type: 'mobility', damage: 0, cooldown: 6.0, duration: 0, teleportDistance: 8,
+    type: 'mobility', damage: 0, cooldown: 3.0, duration: 0, teleportDistance: 8,
     statusEffect: 'slow', statusDuration: 2000, leaveFrost: true,
     color: '#a0d8ff', glowColor: '#c8f0ff',
   }),
@@ -220,7 +220,7 @@ export const DARK_SPELLS = {
   }),
   phase_slip: def({
     id: 'phase_slip', name: 'Phase Slip', school: 'dark', tier: 1, class: 'dark',
-    type: 'mobility', damage: 0, cooldown: 7.0, duration: 2.0,
+    type: 'mobility', damage: 0, cooldown: 3.5, duration: 2.0,
     statusEffect: 'phase', statusDuration: 2000,
     color: '#6600cc', glowColor: '#aa00ff',
   }),
@@ -292,7 +292,7 @@ export const SWORD_SPELLS = {
   }),
   lunge: def({
     id: 'lunge', name: 'Lunge', school: 'sword', tier: 1, class: 'sword',
-    type: 'mobility', damage: 30, cooldown: 5.0, speed: 28, duration: 0.2,
+    type: 'mobility', damage: 30, cooldown: 2.5, speed: 28, duration: 0.2,
     color: '#c8c8c8', glowColor: '#ffffff',
   }),
   quick_cut: def({
@@ -353,7 +353,7 @@ export const EARTH_SPELLS = {
   }),
   stone_launch: def({
     id: 'stone_launch', name: 'Stone Launch', school: 'earth', tier: 1, class: 'earth',
-    type: 'mobility', damage: 20, cooldown: 6.0, duration: 0.5,
+    type: 'mobility', damage: 20, cooldown: 3.0, duration: 0.5,
     effect: 'launch_upward', launchForce: 20,
     color: '#8B6914', glowColor: '#a08030',
   }),

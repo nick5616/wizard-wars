@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import * as THREE from 'three';
 import { useGameStore } from '../../stores/gameStore';
 import { ARENA_RADIUS, ARENA_WALL_HEIGHT } from 'shared/constants';
+import { TERRAIN_PIECES } from 'shared/mapLayout';
 
 const FLOOR_SEGMENTS = 128;
 const WALL_SEGMENTS  = 128;
@@ -107,7 +108,68 @@ export function Arena() {
       </mesh>
 
       <Pillars count={8} radius={ARENA_RADIUS - 1.5} domainColor={domainColor} />
+      <Terrain />
     </>
+  );
+}
+
+function Terrain() {
+  const { walls, ramps, platforms } = TERRAIN_PIECES;
+
+  return (
+    <group>
+      {walls.map((w) => {
+        const width = w.maxX - w.minX;
+        const depth = w.maxZ - w.minZ;
+        const cx = (w.minX + w.maxX) / 2;
+        const cz = (w.minZ + w.maxZ) / 2;
+        return (
+          <mesh key={w.id} position={[cx, w.height / 2, cz]} castShadow receiveShadow>
+            <boxGeometry args={[width, w.height, depth]} />
+            <meshStandardMaterial color="#33334f" roughness={0.9} />
+          </mesh>
+        );
+      })}
+
+      {platforms.map((p) => {
+        const width = p.maxX - p.minX;
+        const depth = p.maxZ - p.minZ;
+        const cx = (p.minX + p.maxX) / 2;
+        const cz = (p.minZ + p.maxZ) / 2;
+        return (
+          <mesh key={p.id} position={[cx, p.topY / 2, cz]} castShadow receiveShadow>
+            <boxGeometry args={[width, p.topY, depth]} />
+            <meshStandardMaterial color="#2a2a45" roughness={0.85} />
+          </mesh>
+        );
+      })}
+
+      {ramps.map((r) => {
+        const span = r.axis === 'z' ? r.maxZ - r.minZ : r.maxX - r.minX;
+        const rise = r.y1 - r.y0;
+        const length = Math.sqrt(span * span + rise * rise);
+        const angle = Math.atan2(rise, span);
+        const cx = (r.minX + r.maxX) / 2;
+        const cz = (r.minZ + r.maxZ) / 2;
+        const cy = (r.y0 + r.y1) / 2;
+        const crossWidth = r.axis === 'z' ? (r.maxX - r.minX) : (r.maxZ - r.minZ);
+        // A thin box tilted to match the slope — rotation.x tilts along Z (axis='z'
+        // ramps), rotation.z tilts along X (axis='x' ramps). Good enough visually;
+        // actual walkable collision comes from terrainHeightAt, not this mesh.
+        return (
+          <mesh
+            key={r.id}
+            position={[cx, cy, cz]}
+            rotation={r.axis === 'z' ? [-angle, 0, 0] : [0, 0, angle]}
+            castShadow
+            receiveShadow
+          >
+            <boxGeometry args={r.axis === 'z' ? [crossWidth, 0.4, length] : [length, 0.4, crossWidth]} />
+            <meshStandardMaterial color="#2e2e48" roughness={0.9} />
+          </mesh>
+        );
+      })}
+    </group>
   );
 }
 

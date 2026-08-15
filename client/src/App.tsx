@@ -15,6 +15,7 @@ import { HUD } from './components/ui/HUD';
 import { ClassSelect } from './components/ui/ClassSelect';
 import { SkillTree } from './components/ui/SkillTree';
 import { PauseMenu } from './components/ui/PauseMenu';
+import { ExperimentLab } from './components/ui/ExperimentLab';
 import { NotificationFeed } from './components/ui/NotificationFeed';
 import { SkillVotePrompt } from './components/ui/SkillVotePrompt';
 import { DeathScreen } from './components/ui/DeathScreen';
@@ -36,7 +37,18 @@ const DENY_REASON_TEXT: Record<string, string> = {
   used_this_life: 'Already used this life',
   no_recent_damage: 'No recent damage on target',
   target_not_frozen: 'Target is not frozen',
+  stunned: "Can't cast while stunned",
+  casting: 'Already casting',
+  invalid_target: 'No valid target',
+  out_of_range: 'Target out of range',
+  no_line_of_sight: 'No line of sight to target',
 };
+
+// Cosmetic gate only — the server is the real check (Player.isLocalConnection,
+// derived from the actual TCP remoteAddress). A deployed server never sees a
+// loopback connection from a real external client either way.
+const IS_LOCALHOST = typeof window !== 'undefined' &&
+  (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 
 export default function App() {
   const clockSync = useRef(new ClockSync());
@@ -46,15 +58,16 @@ export default function App() {
 
   const [showSkillTree, setShowSkillTree] = useState(false);
   const [showPauseMenu, setShowPauseMenu] = useState(false);
+  const [showExperimentLab, setShowExperimentLab] = useState(false);
 
   // Must be declared before the useEffect that depends on it
   const phase = useGameStore((s) => s.phase);
 
   // Keep the store flag in sync so CameraController can block inputs
   useEffect(() => {
-    const blocking = showSkillTree || showPauseMenu || phase === 'class_select' || phase === 'connecting';
+    const blocking = showSkillTree || showPauseMenu || showExperimentLab || phase === 'class_select' || phase === 'connecting';
     useGameStore.getState().setMenuOpen(blocking);
-  }, [showSkillTree, showPauseMenu, phase]);
+  }, [showSkillTree, showPauseMenu, showExperimentLab, phase]);
   const {
     setPhase, applyTick, setLocalClass, addKillFeedEntry, setLocalAlive, setLocalPosition, spawnDamageNumber,
     pushNotification, setVoteState,
@@ -78,7 +91,7 @@ export default function App() {
     const offRoomState = wsClient.on(S2C.ROOM_STATE, (msg) => {
       const payload = msg as unknown as GameTickPayload;
       const localId = useNetworkStore.getState().localPlayerId ?? '';
-      applyTick(payload.players, payload.projectiles, payload.effects, payload.domains, payload.tick, payload.timestamp, localId);
+      applyTick(payload.players, payload.projectiles, payload.effects, payload.domains, payload.barriers, payload.tick, payload.timestamp, localId);
       setRoomId(msg.roomId as string);
     });
 
@@ -90,7 +103,10 @@ export default function App() {
       const serverPlayer = payload.players[localId];
       if (serverPlayer) {
         const vel = { x: 0, y: 0, z: 0 };
-        const corrected = prediction.current.reconcile(serverPlayer.position, payload.ackSeq, vel);
+        const barrierCircles = Object.values(payload.barriers ?? {})
+          .filter((b) => b.active)
+          .map((b) => ({ x: b.position.x, z: b.position.z, radius: b.width / 2 }));
+        const corrected = prediction.current.reconcile(serverPlayer.position, payload.ackSeq, vel, barrierCircles);
         useGameStore.setState({ serverCorrectedPos: corrected });
       }
 
@@ -101,7 +117,7 @@ export default function App() {
         }
       }
 
-      applyTick(payload.players, payload.projectiles, payload.effects, payload.domains, payload.tick, payload.timestamp, localId);
+      applyTick(payload.players, payload.projectiles, payload.effects, payload.domains, payload.barriers, payload.tick, payload.timestamp, localId);
 
       // Prune disconnected players from interpolation
       interpolation.current.prune(new Set(Object.keys(payload.players)));
@@ -311,7 +327,28 @@ export default function App() {
 
       {/* Pause menu overlay */}
       {showPauseMenu && (
-        <PauseMenu ws={ws.current} onClose={() => setShowPauseMenu(false)} />
+        <PauseMenu
+          ws={ws.current}
+          onClose={() => setShowPauseMenu(false)}
+          experimentLabAvailable={IS_LOCALHOST}
+          onOpenExperimentLab={() => {
+            setShowPauseMenu(false);
+            ws.current.send(C2S.JOIN_ROOM, { experiment: true, username: `Wizard_${(useNetworkStore.getState().localPlayerId ?? '').slice(0, 4)}` });
+            setShowExperimentLab(true);
+          }}
+        />
+      )}
+
+      {/* Experiment Lab overlay (localhost only) */}
+      {showExperimentLab && (
+        <ExperimentLab
+          ws={ws.current}
+          onClose={() => setShowExperimentLab(false)}
+          onReturnToLobby={() => {
+            setShowExperimentLab(false);
+            ws.current.send(C2S.JOIN_ROOM, { roomId: 'lobby', username: `Wizard_${(useNetworkStore.getState().localPlayerId ?? '').slice(0, 4)}` });
+          }}
+        />
       )}
     </div>
   );

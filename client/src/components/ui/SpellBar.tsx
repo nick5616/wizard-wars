@@ -1,5 +1,6 @@
 import { useGameStore } from '../../stores/gameStore';
 import { getSpell, MOBILITY_SPELL } from 'shared/spells';
+import { SpellTypeIcon } from './SpellTypeIcon';
 
 export function SpellBar() {
   const { local, setActiveSlot } = useGameStore();
@@ -80,6 +81,14 @@ export function SpellBar() {
           </div>
         )}
         <div style={{ position: 'absolute', top: 2, left: 4, fontSize: 10, color: '#666' }}>⇧</div>
+        {mobilitySpell && (
+          <SpellTypeIcon
+            kind="mobility"
+            size={12}
+            color="#999"
+            style={{ position: 'absolute', top: 3, right: 4 }}
+          />
+        )}
       </div>
 
       {local.equippedSpells.map((spellId, i) => {
@@ -176,6 +185,16 @@ export function SpellBar() {
             }}>
               {i + 1}
             </div>
+
+            {/* Spell type icon */}
+            {spell && (
+              <SpellTypeIcon
+                kind={spell.type}
+                size={13}
+                color="#999"
+                style={{ position: 'absolute', top: 4, right: 5 }}
+              />
+            )}
           </div>
         );
       })}

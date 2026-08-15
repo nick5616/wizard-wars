@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useGameStore } from '../../stores/gameStore';
+import { useNetworkStore } from '../../stores/networkStore';
 import { getSpell, MOBILITY_SPELL } from 'shared/spells';
 import type { WebSocketClient } from '../../networking/WebSocketClient';
 import type { WizardClass } from '../../types/game.types';
 import { UIButton } from './UIButton';
+import { SpellTypeIcon, iconKindForSpellId } from './SpellTypeIcon';
 import { C2S } from 'shared/events';
 
 const CLASS_COLORS: Record<WizardClass, string> = {
@@ -25,7 +27,7 @@ const SKILL_DESCRIPTIONS: Record<string, { label: string; description: string }>
   eruption:       { label: 'Eruption',           description: 'Fire pillar erupts beneath target after a short delay.' },
   amaterasu:      { label: 'Amaterasu',          description: 'Black fire placed on target. Burns eternally.' },
   solar_flare:    { label: 'Solar Flare',        description: 'Brief flash on hit. Momentary blind.' },
-  inferno_domain: { label: 'Inferno Domain',    description: 'Domain: projectiles accelerate toward center. 4s.' },
+  inferno_domain: { label: 'Inferno Domain',    description: 'Domain: projectiles accelerate toward center. 10s.' },
   phoenix:        { label: 'Phoenix',            description: 'Once per life, fatal blow leaves you at 20% HP.' },
   god_ray:        { label: 'God Ray',            description: 'Hitscan. Concentrated sunlight. Instant. Melts.' },
   frost_bite:     { label: 'Frost Bite',         description: 'Cone of cold. Minor slow.' },
@@ -104,9 +106,11 @@ type Tab = 'spells' | 'glossary' | 'settings';
 interface PauseMenuProps {
   ws: WebSocketClient;
   onClose: () => void;
+  experimentLabAvailable?: boolean;
+  onOpenExperimentLab?: () => void;
 }
 
-export function PauseMenu({ ws, onClose }: PauseMenuProps) {
+export function PauseMenu({ ws, onClose, experimentLabAvailable, onOpenExperimentLab }: PauseMenuProps) {
   const local = useGameStore((s) => s.local);
   const [tab, setTab] = useState<Tab>('spells');
 
@@ -222,7 +226,13 @@ export function PauseMenu({ ws, onClose }: PauseMenuProps) {
             <GlossaryTab unlockedList={unlockedList} classColor={classColor} />
           )}
           {tab === 'settings' && (
-            <SettingsTab ws={ws} onClose={onClose} classColor={classColor} />
+            <SettingsTab
+              ws={ws}
+              onClose={onClose}
+              classColor={classColor}
+              experimentLabAvailable={experimentLabAvailable}
+              onOpenExperimentLab={onOpenExperimentLab}
+            />
           )}
         </div>
       </div>
@@ -289,7 +299,10 @@ function SpellsTab({ local, mobilitySpell, classColor, ws }: {
               {spell ? (
                 <>
                   <div style={{ width: 8, height: 8, borderRadius: '50%', background: spell.color, margin: '0 auto 5px', boxShadow: `0 0 5px ${spell.glowColor}` }} />
-                  <div style={{ color: isSelected ? classColor : '#ccc', fontSize: 10, lineHeight: 1.3 }}>{spell.name}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+                    <SpellTypeIcon kind={spell.type} size={11} color={isSelected ? classColor : '#888'} />
+                    <div style={{ color: isSelected ? classColor : '#ccc', fontSize: 10, lineHeight: 1.3 }}>{spell.name}</div>
+                  </div>
                 </>
               ) : (
                 <div style={{ color: '#444', fontSize: 11, marginTop: 4 }}>—</div>
@@ -389,7 +402,10 @@ function SpellsTab({ local, mobilitySpell, classColor, ws }: {
                   {spell.statusEffect && <span style={{ color: '#aa88ff' }}>+{spell.statusEffect}</span>}
                 </div>
               </div>
-              <div style={{ color: '#555', fontSize: 9, textTransform: 'uppercase', letterSpacing: 1, flexShrink: 0 }}>{spell.type}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
+                <SpellTypeIcon kind={spell.type} size={12} color="#777" />
+                <div style={{ color: '#555', fontSize: 9, textTransform: 'uppercase', letterSpacing: 1 }}>{spell.type}</div>
+              </div>
             </UIButton>
           );
         })
@@ -428,14 +444,20 @@ function GlossaryTab({ unlockedList, classColor }: {
   );
 }
 
-function SettingsTab({ ws, onClose, classColor }: {
+function SettingsTab({ ws, onClose, classColor, experimentLabAvailable, onOpenExperimentLab }: {
   ws: WebSocketClient;
   onClose: () => void;
   classColor: string;
+  experimentLabAvailable?: boolean;
+  onOpenExperimentLab?: () => void;
 }) {
   const [muted, setMuted] = useState(false);
   const debugMode = useGameStore((s) => s.debugMode);
   const setDebugMode = useGameStore((s) => s.setDebugMode);
+  const players = useGameStore((s) => s.players);
+  const roomId = useNetworkStore((s) => s.roomId);
+  const inExperiment = !!roomId && roomId.startsWith('experiment-');
+  const experimentBotCount = inExperiment ? Object.values(players).filter((p) => p.isBot).length : 0;
 
   function toggleDebug(v: boolean) {
     setDebugMode(v);
@@ -463,6 +485,54 @@ function SettingsTab({ ws, onClose, classColor }: {
         classColor="#ffcc00"
         hint="Unlocks all skill tree nodes. Grants 999 points."
       />
+
+      {/* Bots */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #1a1a28' }}>
+        <span style={{ color: '#ccc', fontSize: 12 }}>Bots</span>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <UIButton
+            onClick={() => ws.send(C2S.SPAWN_BOTS, {})}
+            style={{
+              padding: '5px 10px', background: 'rgba(0,150,0,0.15)', border: '1px solid #2a6b2a',
+              borderRadius: 3, color: '#8fdb8f', fontSize: 10, letterSpacing: 1, cursor: 'pointer', textTransform: 'uppercase',
+            }}
+          >
+            Spawn one of each
+          </UIButton>
+          <UIButton
+            onClick={() => ws.send(C2S.DESPAWN_BOTS, {})}
+            style={{
+              padding: '5px 10px', background: 'rgba(150,0,0,0.15)', border: '1px solid #6b2a2a',
+              borderRadius: 3, color: '#db8f8f', fontSize: 10, letterSpacing: 1, cursor: 'pointer', textTransform: 'uppercase',
+            }}
+          >
+            Clear
+          </UIButton>
+        </div>
+      </div>
+
+      {/* Experiment Lab */}
+      {experimentLabAvailable && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #1a1a28' }}>
+          <div>
+            <div style={{ color: '#ccc', fontSize: 12 }}>Experiment Lab</div>
+            <div style={{ color: inExperiment ? '#66ddaa' : '#888', fontSize: 10, marginTop: 2 }}>
+              {inExperiment
+                ? `Experiment in progress — ${experimentBotCount} bot${experimentBotCount !== 1 ? 's' : ''}`
+                : 'Sandbox + tournament simulator (localhost only)'}
+            </div>
+          </div>
+          <UIButton
+            onClick={() => onOpenExperimentLab?.()}
+            style={{
+              padding: '5px 10px', background: 'rgba(0,150,120,0.15)', border: '1px solid #2a6b5a',
+              borderRadius: 3, color: '#66ddaa', fontSize: 10, letterSpacing: 1, cursor: 'pointer', textTransform: 'uppercase', flexShrink: 0,
+            }}
+          >
+            {inExperiment ? 'Resume' : 'Enter'}
+          </UIButton>
+        </div>
+      )}
 
       {/* Controls reference */}
       <div style={{ borderTop: '1px solid #252535', marginTop: 24, paddingTop: 24 }}>
