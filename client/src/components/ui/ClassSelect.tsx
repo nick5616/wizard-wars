@@ -19,13 +19,15 @@ const CLASSES: { id: WizardClass; name: string; tagline: string; playstyle: stri
 
 export function ClassSelect({ ws, onSelected }: ClassSelectProps) {
   const [hovered, setHovered] = useState<WizardClass | null>(null);
+  const [name, setName] = useState('');
 
   useEffect(() => {
     if (document.pointerLockElement) document.exitPointerLock();
   }, []);
 
   function select(c: WizardClass) {
-    ws.send(C2S.SELECT_CLASS, { class: c });
+    const trimmed = name.trim().slice(0, 20);
+    ws.send(C2S.SELECT_CLASS, trimmed ? { class: c, username: trimmed } : { class: c });
     onSelected(c);
   }
 
@@ -46,9 +48,30 @@ export function ClassSelect({ ws, onSelected }: ClassSelectProps) {
       <div style={{ color: '#ccccdd', letterSpacing: 8, fontSize: 14, marginBottom: 8, textTransform: 'uppercase' }}>
         Choose Your Class
       </div>
-      <div style={{ color: '#888', fontSize: 13, marginBottom: 48, letterSpacing: 2 }}>
+      <div style={{ color: '#888', fontSize: 13, marginBottom: 28, letterSpacing: 2 }}>
         Your choice is permanent for this life
       </div>
+
+      <input
+        value={name}
+        onChange={(e) => setName(e.target.value.slice(0, 20))}
+        placeholder="Enter your name..."
+        maxLength={20}
+        style={{
+          width: 280,
+          marginBottom: 40,
+          padding: '10px 14px',
+          background: 'rgba(255,255,255,0.03)',
+          border: '1px solid #333',
+          borderRadius: 3,
+          color: '#eee',
+          fontSize: 13,
+          letterSpacing: 1,
+          textAlign: 'center',
+          fontFamily: "'Courier New', monospace",
+          outline: 'none',
+        }}
+      />
 
       <div style={{ display: 'flex', gap: 16, marginBottom: 48 }}>
         {CLASSES.map((c) => (

@@ -32,6 +32,9 @@ export const FIRE_SPELLS = {
     id: 'lightning_strike', name: 'Lightning Strike', school: 'fire', tier: 4, class: 'fire',
     type: 'aoe', damage: 70, cooldown: 4.0, radius: 2.0, windupMs: 600,
     statusEffect: 'stun', statusDuration: 800,
+    // Snaps the telegraph circle to land under a player the crosshair is
+    // over, instead of always landing at a fixed distance along aim.
+    groundSnapToPlayer: true,
     color: '#ffe066', glowColor: '#ffffff',
   }),
   immolate: def({
@@ -66,18 +69,35 @@ export const FIRE_SPELLS = {
   }),
   god_ray: def({
     id: 'god_ray', name: 'God Ray', school: 'fire', tier: 8, class: 'fire',
-    type: 'hitscan', damage: 240, cooldown: 12.0,
+    // sniperSight: a faint aim line is visible to everyone (not just you)
+    // while this is your selected spell -- lets a target downrange feel it
+    // coming, like a laser sight, before you've even fired.
+    type: 'hitscan', damage: 240, cooldown: 12.0, sniperSight: true,
     color: '#ffffa0', glowColor: '#ffffff',
   }),
   magma_dash: def({
     id: 'magma_dash', name: 'Magma Dash', school: 'fire', tier: 1, class: 'fire',
-    type: 'mobility', damage: 15, cooldown: 2.5, speed: 25, duration: 0.25,
+    type: 'mobility', damage: 8, cooldown: 1.5, speed: 25, duration: 0.25,
     color: '#ff4500', glowColor: '#ff6b2b',
   }),
   spark_shot: def({
     id: 'spark_shot', name: 'Spark Shot', school: 'fire', tier: 2, class: 'fire',
     type: 'projectile', damage: 11, cooldown: 0.12, speed: 48, radius: 0.18,
     color: '#ffaa00', glowColor: '#ff6600',
+  }),
+  // ── Runes: placed on the ground, arm briefly, then detonate on the first
+  // enemy to walk into them (see SpellSystem._castRune / tickRunes). ─────────
+  rune_ember: def({
+    id: 'rune_ember', name: 'Ember Rune', school: 'fire', tier: 2, class: 'fire',
+    type: 'rune', damage: 45, cooldown: 7.0, radius: 2.0, armMs: 400, duration: 18000,
+    statusEffect: 'burn', statusDuration: 1500,
+    color: '#ff6b2b', glowColor: '#ff4500',
+  }),
+  rune_magma: def({
+    id: 'rune_magma', name: 'Magma Rune', school: 'fire', tier: 9, class: 'fire',
+    type: 'rune', damage: 140, cooldown: 15.0, radius: 3.0, armMs: 500, duration: 20000,
+    statusEffect: 'burn', statusDuration: 2500,
+    color: '#ff4500', glowColor: '#ff2200',
   }),
 };
 
@@ -105,7 +125,10 @@ export const ICE_SPELLS = {
   }),
   frost_nova: def({
     id: 'frost_nova', name: 'Frost Nova', school: 'ice', tier: 4, class: 'ice',
-    type: 'aoe', damage: 30, cooldown: 5.0, radius: 5.0,
+    // selfCast: it's a "ground pulse" centered on the caster -- without this
+    // it landed 12 units out along your aim like every other aimed aoe,
+    // which for a nova almost never actually caught anyone.
+    type: 'aoe', damage: 30, cooldown: 5.0, radius: 5.0, selfCast: true,
     statusEffect: 'freeze', statusDuration: 1500,
     color: '#a0d8ff', glowColor: '#ffffff',
   }),
@@ -135,13 +158,13 @@ export const ICE_SPELLS = {
   }),
   divine_judgement: def({
     id: 'divine_judgement', name: 'Divine Judgement', school: 'ice', tier: 8, class: 'ice',
-    type: 'hitscan', damage: 220, cooldown: 14.0,
+    type: 'hitscan', damage: 220, cooldown: 14.0, sniperSight: true,
     statusEffect: 'freeze', statusDuration: 0, // instant shatter on frozen
     color: '#ffffff', glowColor: '#a0d8ff',
   }),
   glacier_step: def({
     id: 'glacier_step', name: 'Glacier Step', school: 'ice', tier: 1, class: 'ice',
-    type: 'mobility', damage: 0, cooldown: 3.0, duration: 0, teleportDistance: 8,
+    type: 'mobility', damage: 0, cooldown: 1.8, duration: 0, teleportDistance: 8,
     statusEffect: 'slow', statusDuration: 2000, leaveFrost: true,
     color: '#a0d8ff', glowColor: '#c8f0ff',
   }),
@@ -150,6 +173,18 @@ export const ICE_SPELLS = {
     type: 'projectile', damage: 9, cooldown: 0.15, speed: 44, radius: 0.12,
     statusEffect: 'slow', statusDuration: 250,
     color: '#88ddff', glowColor: '#aaeeff',
+  }),
+  rune_rime: def({
+    id: 'rune_rime', name: 'Rime Rune', school: 'ice', tier: 2, class: 'ice',
+    type: 'rune', damage: 35, cooldown: 7.0, radius: 2.0, armMs: 400, duration: 18000,
+    statusEffect: 'slow', statusDuration: 1500,
+    color: '#a0d8ff', glowColor: '#c8f0ff',
+  }),
+  rune_glacier: def({
+    id: 'rune_glacier', name: 'Glacier Rune', school: 'ice', tier: 9, class: 'ice',
+    type: 'rune', damage: 130, cooldown: 15.0, radius: 3.0, armMs: 500, duration: 20000,
+    statusEffect: 'freeze', statusDuration: 2000,
+    color: '#00c8ff', glowColor: '#ffffff',
   }),
 };
 
@@ -207,7 +242,7 @@ export const DARK_SPELLS = {
   }),
   null_gaze: def({
     id: 'null_gaze', name: 'Null Gaze', school: 'dark', tier: 8, class: 'dark',
-    type: 'hitscan', damage: 180, cooldown: 10.0,
+    type: 'hitscan', damage: 180, cooldown: 10.0, sniperSight: true,
     wallPiercing: true, leavesTrail: true, trailDuration: 3000,
     color: '#220044', glowColor: '#4400aa',
   }),
@@ -220,7 +255,7 @@ export const DARK_SPELLS = {
   }),
   phase_slip: def({
     id: 'phase_slip', name: 'Phase Slip', school: 'dark', tier: 1, class: 'dark',
-    type: 'mobility', damage: 0, cooldown: 3.5, duration: 2.0,
+    type: 'mobility', damage: 0, cooldown: 2.2, duration: 2.0,
     statusEffect: 'phase', statusDuration: 2000,
     color: '#6600cc', glowColor: '#aa00ff',
   }),
@@ -228,6 +263,18 @@ export const DARK_SPELLS = {
     id: 'void_tap', name: 'Void Tap', school: 'dark', tier: 2, class: 'dark',
     type: 'aoe', damage: 18, cooldown: 0.1, radius: 2.8,
     color: '#4400aa', glowColor: '#7700ee',
+  }),
+  rune_hex: def({
+    id: 'rune_hex', name: 'Hex Rune', school: 'dark', tier: 2, class: 'dark',
+    type: 'rune', damage: 40, cooldown: 7.0, radius: 2.0, armMs: 400, duration: 18000,
+    lifesteal: 0.5,
+    color: '#6600cc', glowColor: '#aa00ff',
+  }),
+  rune_soul: def({
+    id: 'rune_soul', name: 'Soul Rune', school: 'dark', tier: 10, class: 'dark',
+    type: 'rune', damage: 150, cooldown: 15.0, radius: 3.0, armMs: 500, duration: 20000,
+    lifesteal: 0.8,
+    color: '#220044', glowColor: '#cc00ff',
   }),
 };
 
@@ -286,19 +333,31 @@ export const SWORD_SPELLS = {
   }),
   gods_edge: def({
     id: 'gods_edge', name: "God's Edge", school: 'sword', tier: 8, class: 'sword',
-    type: 'hitscan', damage: 260, cooldown: 11.0,
+    type: 'hitscan', damage: 260, cooldown: 11.0, sniperSight: true,
     wallPiercing: false, destroysBarriers: true, bypassesParry: true,
     color: '#ffffff', glowColor: '#c8c8ff',
   }),
   lunge: def({
     id: 'lunge', name: 'Lunge', school: 'sword', tier: 1, class: 'sword',
-    type: 'mobility', damage: 30, cooldown: 2.5, speed: 28, duration: 0.2,
+    type: 'mobility', damage: 15, cooldown: 1.5, speed: 28, duration: 0.2,
     color: '#c8c8c8', glowColor: '#ffffff',
   }),
   quick_cut: def({
     id: 'quick_cut', name: 'Quick Cut', school: 'sword', tier: 2, class: 'sword',
     type: 'aoe', damage: 13, cooldown: 0.09, radius: 2.2,
     color: '#e8e8e8', glowColor: '#ffffff',
+  }),
+  rune_snare: def({
+    id: 'rune_snare', name: 'Snare Rune', school: 'sword', tier: 2, class: 'sword',
+    type: 'rune', damage: 40, cooldown: 7.0, radius: 1.8, armMs: 400, duration: 18000,
+    statusEffect: 'stun', statusDuration: 600,
+    color: '#c8c8c8', glowColor: '#ffffff',
+  }),
+  rune_executioner: def({
+    id: 'rune_executioner', name: "Executioner's Rune", school: 'sword', tier: 9, class: 'sword',
+    type: 'rune', damage: 160, cooldown: 15.0, radius: 2.5, armMs: 500, duration: 20000,
+    statusEffect: 'stun', statusDuration: 1200,
+    color: '#ffffff', glowColor: '#c8c8ff',
   }),
 };
 
@@ -346,14 +405,14 @@ export const EARTH_SPELLS = {
   }),
   the_monolith: def({
     id: 'the_monolith', name: 'The Monolith', school: 'earth', tier: 8, class: 'earth',
-    type: 'hitscan', damage: 280, cooldown: 16.0,
+    type: 'hitscan', damage: 280, cooldown: 16.0, sniperSight: true,
     windupMs: 1000, // visible for a full second
     statusEffect: 'slow', statusDuration: 3000,
     color: '#8B6914', glowColor: '#6B5010',
   }),
   stone_launch: def({
     id: 'stone_launch', name: 'Stone Launch', school: 'earth', tier: 1, class: 'earth',
-    type: 'mobility', damage: 20, cooldown: 3.0, duration: 0.5,
+    type: 'mobility', damage: 10, cooldown: 1.8, duration: 0.5,
     effect: 'launch_upward', launchForce: 20,
     color: '#8B6914', glowColor: '#a08030',
   }),
@@ -362,6 +421,18 @@ export const EARTH_SPELLS = {
     type: 'projectile', damage: 9, cooldown: 0.18, speed: 30, radius: 0.22,
     spreadCount: 3, spreadAngle: 18,
     color: '#aa8822', glowColor: '#cc9933',
+  }),
+  rune_root: def({
+    id: 'rune_root', name: 'Root Rune', school: 'earth', tier: 2, class: 'earth',
+    type: 'rune', damage: 45, cooldown: 7.0, radius: 2.2, armMs: 400, duration: 18000,
+    statusEffect: 'stun', statusDuration: 500,
+    color: '#8B6914', glowColor: '#a08030',
+  }),
+  rune_seismic: def({
+    id: 'rune_seismic', name: 'Seismic Rune', school: 'earth', tier: 11, class: 'earth',
+    type: 'rune', damage: 150, cooldown: 15.0, radius: 3.5, armMs: 500, duration: 20000,
+    statusEffect: 'stun', statusDuration: 1000,
+    color: '#6B5010', glowColor: '#8B6914',
   }),
 };
 
@@ -411,13 +482,20 @@ export const ALL_SPELLS = {
 
 export const getSpell = (id) => ALL_SPELLS[id] ?? null;
 
-// Default starting spells per class (slot index → spell id)
+/** Equip slots are keyed off the top-row digits 1-9 then 0, so 10 is the hard cap. */
+export const MAX_SPELL_SLOTS = 10;
+
+/** True for spells that belong in a regular equip slot (excludes passives and the Shift mobility spell). */
+export const isEquippableSpell = (spell) => spell.type !== 'passive' && spell.type !== 'mobility';
+
+// Default starting spells per class (slot index → spell id). Padded to
+// MAX_SPELL_SLOTS -- remaining slots open up as the player unlocks more spells.
 export const DEFAULT_EQUIPPED = {
-  fire:  ['ember_flick', 'fireball', null, null],
-  ice:   ['frost_bite', 'glacial_spike', null, null],
-  dark:  ['void_touch', 'soul_drain', null, null],
-  sword: ['iron_edge', 'bladestorm', null, null],
-  earth: ['pebble_shot', 'stone_spire', null, null],
+  fire:  ['ember_flick', 'fireball', ...Array(MAX_SPELL_SLOTS - 2).fill(null)],
+  ice:   ['frost_bite', 'glacial_spike', ...Array(MAX_SPELL_SLOTS - 2).fill(null)],
+  dark:  ['void_touch', 'soul_drain', ...Array(MAX_SPELL_SLOTS - 2).fill(null)],
+  sword: ['iron_edge', 'bladestorm', ...Array(MAX_SPELL_SLOTS - 2).fill(null)],
+  earth: ['pebble_shot', 'stone_spire', ...Array(MAX_SPELL_SLOTS - 2).fill(null)],
 };
 
 // Mobility spells per class (triggered by Shift, not in regular slots)

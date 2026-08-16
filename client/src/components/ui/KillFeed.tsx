@@ -29,9 +29,9 @@ export function KillFeed() {
             gap: 6,
             alignItems: 'center',
           }}>
-            <span style={{ color: '#ff6666' }}>{entry.killer}</span>
+            <span style={{ color: '#ff6666' }}>{entry.killerSymbol ? `${entry.killerSymbol} ` : ''}{entry.killer}</span>
             <span style={{ color: '#aaa' }}>→</span>
-            <span style={{ color: '#ccc' }}>{entry.victim}</span>
+            <span style={{ color: '#ccc' }}>{entry.victimSymbol ? `${entry.victimSymbol} ` : ''}{entry.victim}</span>
           </div>
         );
       })}

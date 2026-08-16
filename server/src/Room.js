@@ -16,6 +16,7 @@ import { getSpell } from 'shared/spells';
 import { XP_PER_KILL, levelFromXp, rankForLevel, hatBuffTierForLevel, HAT_BUFF_DAMAGE_MULT } from 'shared/leveling';
 import { terrainHeightAt, resolveTerrainCollision, resolveCircleObstacles } from 'shared/mapLayout';
 import { STATUS_EFFECTS, DOMAIN_CONFIGS } from 'shared/gameConfig';
+import { CLASS_LABEL, classSymbol } from 'shared/classFlavor';
 
 const SPAWN_POSITIONS = [
   { x: 0, y: PLAYER_HEIGHT, z: -20 },
@@ -47,6 +48,12 @@ export class Room {
     this._pendingRespawns = []; // { playerId, at }
     this.botControllers = new Map(); // botId -> BotController
     this.damageLog = new Map(); // spellId -> { totalDamage, hits } — feeds the Experiment Lab's "how well do abilities perform" stats
+    this.headToHead = new Map(); // "${winnerId}>${loserId}" -> kill count, feeds the Experiment Lab's live combat log
+  }
+
+  /** Kills `a` has scored on `b` so far this room. */
+  _h2h(a, b) {
+    return this.headToHead.get(`${a}>${b}`) ?? 0;
   }
 
   start() {
@@ -105,7 +112,11 @@ export class Room {
   /** Creates and spawns a bot into this room. Returns the Bot instance. */
   spawnBot({ class: wizardClass, behavior = 'aggressive', position = null, loadout = null, autoEquipOnLevel = true }) {
     const id = `bot-${uuid()}`;
-    const bot = new Bot({ id, username: `Bot_${id.slice(4, 8)}`, class: wizardClass, behavior, autoEquipOnLevel });
+    // "EarthBot_4324" -- names the class so a killfeed/scoreboard entry reads
+    // as an actual opponent instead of an anonymous id fragment.
+    const namePrefix = CLASS_LABEL[wizardClass] ?? 'Wizard';
+    const username = `${namePrefix}Bot_${1000 + Math.floor(Math.random() * 9000)}`;
+    const bot = new Bot({ id, username, class: wizardClass, behavior, autoEquipOnLevel });
     if (loadout) bot.equippedSpells = [...loadout];
 
     this.server.players.set(id, bot);
@@ -298,9 +309,18 @@ export class Room {
   }
 
   processInput(player, input) {
+    // Frozen and hidden while a skill-tree fork vote is open for them -- see
+    // ProgressionSystem._openVote. No movement, no casts, nothing.
+    if (player.isChoosingBranch) return;
+
     // Store latest input for next tick
     player.pendingInput = input;
     player.lastInputSeq = input.seq;
+    // Which hotbar slot is selected -- not part of physics sim, applied
+    // immediately. Drives the sniper-sight aim line for endgame hitscan
+    // spells (see Player.serialize / SniperSightLines.tsx): everyone needs
+    // to see it, not just the caster, so it has to be broadcast state.
+    if (typeof input.activeSlot === 'number') player.activeSlot = input.activeSlot;
 
     // Handle spell cast in input
     if (input.cast) {
@@ -321,11 +341,12 @@ export class Room {
     }
   }
 
-  applyDamage(targetId, damage, sourceId, spellId) {
+  applyDamage(targetId, damage, sourceId, spellId, isHeadshot = false) {
     const target = this.server.players.get(targetId);
     if (!target || !target.isAlive) return 0;
     if (target.hasEffect('phase')) return 0;
     if (target.isGodMode) return 0; // Experiment Lab: invulnerable
+    if (target.isChoosingBranch) return 0; // hidden + frozen at the fork-choice screen
 
     // Interrupt an in-progress windup cast (Death Note, Petrify, ...) if it allows it
     if (target.pendingCast?.interruptible) {
@@ -500,14 +521,27 @@ export class Room {
       target.applyEffect('blind', 500, 1, sourceId);
     }
 
+    // Experiment Lab: live combat log — only for bot-involved fights, since
+    // regular PvP already has its own hitmarker/damage-number feedback and
+    // doesn't need a second broadcast per hit.
+    if (attacker && Math.round(finalDamage) > 0 && (attacker.isBot || target.isBot)) {
+      this.server.broadcast(this.id, {
+        type: S2C.COMBAT_LOG,
+        kind: 'hit',
+        sourceId, sourceName: attacker.username, sourceIsBot: !!attacker.isBot,
+        targetId, targetName: target.username, targetIsBot: !!target.isBot,
+        spellId, damage: Math.round(finalDamage), isHeadshot: !!isHeadshot,
+      });
+    }
+
     if (target.health <= 0) {
-      this._handleDeath(target, sourceId);
+      this._handleDeath(target, sourceId, spellId);
     }
 
     return Math.round(finalDamage);
   }
 
-  _handleDeath(player, killerId) {
+  _handleDeath(player, killerId, killingSpellId = null) {
     // Check phoenix passive (fire)
     if (player.class === 'fire' && player.unlockedNodes.has('phoenix') && !player.oncePerLifeUsed.has('phoenix')) {
       player.health = Math.round(player.maxHealth * 0.2);
@@ -572,9 +606,29 @@ export class Room {
     this.server.broadcast(this.id, {
       type: S2C.KILL_FEED,
       killer: killer?.username ?? 'Arena',
+      killerSymbol: killer ? classSymbol(killer.class, killer.divergedBranch) : '',
       victim: player.username,
-      spellId: null,
+      victimSymbol: classSymbol(player.class, player.divergedBranch),
+      spellId: killingSpellId,
     });
+
+    // Experiment Lab: live combat log with the running head-to-head record
+    // between these two -- e.g. "(3-1)" means the killer is now up 3 kills
+    // to the victim's 1 against each other specifically, not overall kills.
+    if (killer) {
+      this.headToHead.set(`${killerId}>${player.id}`, this._h2h(killerId, player.id) + 1);
+      if (killer.isBot || player.isBot) {
+        this.server.broadcast(this.id, {
+          type: S2C.COMBAT_LOG,
+          kind: 'kill',
+          sourceId: killerId, sourceName: killer.username, sourceIsBot: !!killer.isBot,
+          targetId: player.id, targetName: player.username, targetIsBot: !!player.isBot,
+          spellId: killingSpellId,
+          killerWins: this._h2h(killerId, player.id),
+          victimWins: this._h2h(player.id, killerId),
+        });
+      }
+    }
 
     if (this.respawnEnabled) this.scheduleRespawn(player.id);
   }

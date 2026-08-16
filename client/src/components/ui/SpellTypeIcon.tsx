@@ -26,6 +26,7 @@ const LABELS: Record<IconKind, string> = {
   direct: 'Direct — applied straight to a locked target, no travel time',
   mobility: 'Mobility — movement ability',
   passive: 'Passive — always-on effect, not cast',
+  rune: 'Rune — placed on the ground, detonates on the first enemy to step in it',
 };
 
 interface Props {
@@ -125,6 +126,13 @@ function glyph(kind: IconKind) {
           <line x1="2.5" y1="18" x2="8" y2="18" opacity={0.4} />
           <line x1="5.5" y1="13" x2="12" y2="13" opacity={0.7} />
           <path d="M11 6.5l9 6.5-9 6.5z" fill="currentColor" stroke="none" />
+        </>
+      );
+    case 'rune': // sigil — diamond with an inner mark, placed-on-ground trap
+      return (
+        <>
+          <path d="M12 2.5l8 9.5-8 9.5-8-9.5z" />
+          <circle cx="12" cy="12" r="2.6" />
         </>
       );
     case 'passive':

@@ -24,6 +24,7 @@ import { getSpell } from 'shared/spells';
 import { S2C, C2S } from 'shared/events';
 import { RANKS } from 'shared/leveling';
 import type { GameTickPayload, WizardClass } from './types/game.types';
+import { IS_LOCALHOST } from './utils/isLocalhost';
 
 const WS_URL = import.meta.env.VITE_WS_URL ?? 'ws://localhost:8080';
 
@@ -44,12 +45,6 @@ const DENY_REASON_TEXT: Record<string, string> = {
   no_line_of_sight: 'No line of sight to target',
 };
 
-// Cosmetic gate only — the server is the real check (Player.isLocalConnection,
-// derived from the actual TCP remoteAddress). A deployed server never sees a
-// loopback connection from a real external client either way.
-const IS_LOCALHOST = typeof window !== 'undefined' &&
-  (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
-
 export default function App() {
   const clockSync = useRef(new ClockSync());
   const ws = useRef(new WebSocketClient(WS_URL, clockSync.current));
@@ -63,11 +58,16 @@ export default function App() {
   // Must be declared before the useEffect that depends on it
   const phase = useGameStore((s) => s.phase);
 
-  // Keep the store flag in sync so CameraController can block inputs
+  const voteState = useGameStore((s) => s.voteState);
+
+  // Keep the store flag in sync so CameraController can block inputs.
+  // A branch-choice vote blocks the same way a menu does -- the player is
+  // hidden and frozen server-side for its duration (see Room.processInput's
+  // isChoosingBranch check), so local input needs to stop too.
   useEffect(() => {
-    const blocking = showSkillTree || showPauseMenu || showExperimentLab || phase === 'class_select' || phase === 'connecting';
+    const blocking = showSkillTree || showPauseMenu || showExperimentLab || phase === 'class_select' || phase === 'connecting' || !!voteState;
     useGameStore.getState().setMenuOpen(blocking);
-  }, [showSkillTree, showPauseMenu, showExperimentLab, phase]);
+  }, [showSkillTree, showPauseMenu, showExperimentLab, phase, voteState]);
   const {
     setPhase, applyTick, setLocalClass, addKillFeedEntry, setLocalAlive, setLocalPosition, spawnDamageNumber,
     pushNotification, setVoteState,
@@ -190,7 +190,9 @@ export default function App() {
     const offKillFeed = wsClient.on(S2C.KILL_FEED, (msg) => {
       addKillFeedEntry({
         killer: msg.killer as string,
+        killerSymbol: msg.killerSymbol as string | undefined,
         victim: msg.victim as string,
+        victimSymbol: msg.victimSymbol as string | undefined,
         spellId: msg.spellId as string | null,
         at: Date.now(),
       });
@@ -292,7 +294,7 @@ export default function App() {
       />
 
       {/* 2D overlay UI */}
-      <HUD />
+      <HUD ws={ws.current} />
       <NotificationFeed />
       {phase === 'playing' && <SkillVotePrompt ws={ws.current} />}
       {phase === 'dead' && <DeathScreen ws={ws.current} />}

@@ -56,9 +56,42 @@ export class ProgressionSystem {
     }
   }
 
+  /**
+   * Debug mode: unlock the entire tree right now, including BOTH sides of
+   * the class's one fork -- a normal playthrough (and the old version of
+   * this method, which just auto-picked one fork option via the vote path)
+   * only ever grants one branch, since divergedBranch is meant to be a
+   * permanent commitment. That's correct for real play but is exactly why
+   * debug mode kept showing "missing paths": half the tree is unreachable
+   * by design once you've committed. Debug mode is for testing everything
+   * at once, so it bypasses that exclusivity entirely and force-unlocks
+   * every node in tier order, ignoring prereqs and branchGroup gating.
+   */
+  forceUnlockAll(player) {
+    if (!player.class) return;
+    this.pendingVotes.delete(player.id);
+
+    const sorted = [...(SKILL_TREES[player.class] ?? [])].sort((a, b) => a.tier - b.tier);
+    for (const node of sorted) {
+      if (player.unlockedNodes.has(node.id)) continue;
+      // Cosmetic only in debug mode -- lets whichever branch unlocks last
+      // "win" for symbol/title purposes, but both sides' spells are unlocked
+      // and equippable regardless of what divergedBranch ends up holding.
+      if (node.branchGroup) player.divergedBranch[node.branchGroup] = node.branch;
+      this._unlockNode(player, node);
+    }
+  }
+
   _openVote(player, branchGroup, pair) {
     const expiresAt = Date.now() + VOTE_TIMEOUT_MS;
     this.pendingVotes.set(player.id, { branchGroup, options: pair.map((n) => n.id), expiresAt });
+    // Pull the player out of the fight entirely while they decide -- hidden
+    // (RemotePlayer.tsx), invulnerable (Room.applyDamage), and input-frozen
+    // (Room.processInput) until the vote resolves. This is a genuine
+    // once-per-life commitment (see canUnlockNode/tryAutoUnlock's branch
+    // exclusivity), so it gets a moment of real weight instead of a
+    // corner-of-screen prompt you could miss mid-fight.
+    player.isChoosingBranch = true;
     this.room.server.send(player, {
       type: S2C.SKILL_VOTE_PROMPT,
       branchGroup,
@@ -71,6 +104,7 @@ export class ProgressionSystem {
     const pending = this.pendingVotes.get(player.id);
     if (!pending || pending.branchGroup !== branchGroup) return;
     this.pendingVotes.delete(player.id);
+    player.isChoosingBranch = false;
 
     const nodeId = pending.options.includes(choice) ? choice : pending.options[0];
     const node = getNode(player.class, nodeId);

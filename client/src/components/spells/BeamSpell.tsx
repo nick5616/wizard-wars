@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { getSpell } from 'shared/spells';
 import type { EffectState } from '../../types/game.types';
 import { useGameStore } from '../../stores/gameStore';
+import { wandTipWorldPosition } from '../../utils/wandTip';
 
 interface BeamSpellProps {
   effect: EffectState;
@@ -21,7 +22,12 @@ export function BeamSpell({ effect }: BeamSpellProps) {
   const owner = players[effect.ownerId];
   if (!owner) return null;
 
-  const origin = owner.position;
+  // Previously used owner.position (eye level) plus a flat +0.8 Y offset,
+  // which put the beam's start point above the head regardless of aim --
+  // visually "shooting downward" for any target at or below head height.
+  // The wand tip (chest/shoulder height, slightly forward-right) is a much
+  // closer approximation of where the beam should actually originate.
+  const origin = wandTipWorldPosition(owner.position, owner.yaw);
   const dir = effect.direction;
   if (!dir) return null;
 
@@ -45,7 +51,7 @@ export function BeamSpell({ effect }: BeamSpellProps) {
   // Orient cylinder from origin toward dir
   const mid = new THREE.Vector3(
     origin.x + dir.x * BEAM_LENGTH / 2,
-    (origin.y + 0.8) + dir.y * BEAM_LENGTH / 2,
+    origin.y + dir.y * BEAM_LENGTH / 2,
     origin.z + dir.z * BEAM_LENGTH / 2,
   );
 

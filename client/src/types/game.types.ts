@@ -1,5 +1,5 @@
 export type WizardClass = 'fire' | 'ice' | 'dark' | 'sword' | 'earth';
-export type SpellType = 'projectile' | 'beam' | 'hitscan' | 'aoe' | 'domain' | 'direct' | 'passive' | 'mobility' | 'melee';
+export type SpellType = 'projectile' | 'beam' | 'hitscan' | 'aoe' | 'domain' | 'direct' | 'passive' | 'mobility' | 'melee' | 'rune';
 
 export interface Vec3 { x: number; y: number; z: number; }
 
@@ -28,6 +28,10 @@ export interface SpellDef {
   lifesteal?: number;
   isBarrier?: boolean;
   barrierHealth?: number;
+  selfCast?: boolean;
+  length?: number;
+  groundSnapToPlayer?: boolean;
+  sniperSight?: boolean;
 }
 
 export interface PlayerState {
@@ -41,6 +45,8 @@ export interface PlayerState {
   yaw: number;
   pitch: number;
   equippedSpells: (string | null)[];
+  activeSlot?: number;
+  isChoosingBranch?: boolean;
   cooldowns: Record<string, number>; // spellId → ms remaining
   activeEffects: Record<string, { expiresAt: number; stacks: number }>;
   skillPoints: number;
@@ -96,6 +102,8 @@ export interface EffectState {
   triggered?: boolean;
   // Amaterasu specifics (persistent black-fire dot on a target)
   targetId?: string;
+  // Chain lightning: every point the bolt passes through (caster, then each bounce target)
+  points?: Vec3[];
 }
 
 export interface DomainState {
@@ -153,7 +161,9 @@ export interface CastInput {
 
 export interface KillFeedEntry {
   killer: string;
+  killerSymbol?: string;
   victim: string;
+  victimSymbol?: string;
   spellId: string | null;
   at: number;
 }

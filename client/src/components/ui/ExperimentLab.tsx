@@ -7,12 +7,13 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useGameStore } from '../../stores/gameStore';
-import { ALL_SPELLS } from 'shared/spells';
+import { ALL_SPELLS, BASIC_ATTACK, MELEE_ATTACK } from 'shared/spells';
 import { CLASSES } from 'shared/constants';
 import { C2S, S2C } from 'shared/events';
 import type { WebSocketClient } from '../../networking/WebSocketClient';
 import type { WizardClass, SimulationResult } from '../../types/game.types';
 import { UIButton } from './UIButton';
+import { TournamentBracket } from './TournamentBracket';
 
 const CLASS_COLORS: Record<WizardClass, string> = {
   fire: '#ff4500', ice: '#a0d8ff', dark: '#cc00ff', sword: '#c8c8c8', earth: '#8B6914',
@@ -21,8 +22,17 @@ const CLASS_COLORS: Record<WizardClass, string> = {
 const BEHAVIORS = ['static', 'docile', 'aggressive'] as const;
 type Behavior = (typeof BEHAVIORS)[number];
 
+// Basic attack (RMB) and melee (F) are always-on per-class abilities outside
+// the equip slots (see shared/spells.js) -- they're in ALL_SPELLS so combat
+// code can look them up by id, but they were never meant to be pickable as a
+// loadout slot. Putting e.g. "Punch" in a slot didn't make the bot punch-only
+// -- it just added a redundant, silently-broken slot (melee has no
+// slot-cast handling at all, see SpellSystem._dispatchCast) while RMB/F kept
+// firing the real thing regardless of what was equipped.
+const ALWAYS_AVAILABLE_IDS = new Set<string>([...Object.values(BASIC_ATTACK), ...Object.values(MELEE_ATTACK)]);
+
 function equippableSpells(wizardClass: WizardClass) {
-  return Object.values(ALL_SPELLS).filter((s) => s.class === wizardClass && s.type !== 'passive' && s.type !== 'mobility');
+  return Object.values(ALL_SPELLS).filter((s) => s.class === wizardClass && s.type !== 'passive' && s.type !== 'mobility' && !ALWAYS_AVAILABLE_IDS.has(s.id));
 }
 
 function defaultLoadout(wizardClass: WizardClass): (string | null)[] {
@@ -112,6 +122,8 @@ function smallBtnStyle(border: string, color: string) {
 function SandboxTab({ ws }: { ws: WebSocketClient }) {
   const players = useGameStore((s) => s.players);
   const bots = useMemo(() => Object.values(players).filter((p) => p.isBot), [players]);
+  const birdsEyeView = useGameStore((s) => s.birdsEyeView);
+  const setBirdsEyeView = useGameStore((s) => s.setBirdsEyeView);
 
   const [spawnClass, setSpawnClass] = useState<WizardClass>('fire');
   const [spawnBehavior, setSpawnBehavior] = useState<Behavior>('aggressive');
@@ -124,6 +136,18 @@ function SandboxTab({ ws }: { ws: WebSocketClient }) {
 
   return (
     <div>
+      <label style={{
+        display: 'flex', alignItems: 'center', gap: 8, marginBottom: 18, padding: '8px 10px',
+        background: birdsEyeView ? 'rgba(0,150,120,0.12)' : 'transparent',
+        border: `1px solid ${birdsEyeView ? '#2a6b5a' : '#252535'}`, borderRadius: 4, cursor: 'pointer',
+      }}>
+        <input type="checkbox" checked={birdsEyeView} onChange={(e) => setBirdsEyeView(e.target.checked)} />
+        <div>
+          <div style={{ color: birdsEyeView ? '#66ddaa' : '#ccc', fontSize: 12 }}>Bird's eye view</div>
+          <div style={{ color: '#888', fontSize: 10, marginTop: 1 }}>Static camera above the whole arena — good for watching bots fight</div>
+        </div>
+      </label>
+
       <div style={{ color: '#aaa', fontSize: 10, letterSpacing: 2, textTransform: 'uppercase', marginBottom: 10 }}>
         Spawn a bot
       </div>
@@ -150,6 +174,10 @@ function SandboxTab({ ws }: { ws: WebSocketClient }) {
       {bots.map((bot) => (
         <BotRow key={bot.id} bot={bot} ws={ws} />
       ))}
+
+      <div style={{ color: '#666', fontSize: 10, marginTop: 20, paddingTop: 14, borderTop: '1px solid #1c1c2c', fontStyle: 'italic' }}>
+        Live combat log now shows at the top of the main view, even with this panel closed.
+      </div>
     </div>
   );
 }
@@ -233,6 +261,7 @@ interface SideConfig {
 }
 
 function TournamentTab({ ws }: { ws: WebSocketClient }) {
+  const [bracketMode, setBracketMode] = useState(false);
   const [sideA, setSideA] = useState<SideConfig>({ class: 'fire', loadout: defaultLoadout('fire') });
   const [sideB, setSideB] = useState<SideConfig>({ class: 'ice', loadout: defaultLoadout('ice') });
   const [rounds, setRounds] = useState(50);
@@ -270,42 +299,56 @@ function TournamentTab({ ws }: { ws: WebSocketClient }) {
 
   return (
     <div>
-      <div style={{ display: 'flex', gap: 16, marginBottom: 18 }}>
-        <SideConfigPanel label="Side A" config={sideA} onChange={setSideA} />
-        <SideConfigPanel label="Side B" config={sideB} onChange={setSideB} />
-      </div>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-        <span style={{ color: '#aaa', fontSize: 11 }}>Rounds</span>
-        <input
-          type="number" min={1} max={500} value={rounds}
-          onChange={(e) => setRounds(Math.max(1, Math.min(500, Number(e.target.value) || 1)))}
-          style={{ ...selectStyle, width: 70 }}
-        />
-        <UIButton
-          onClick={run}
-          disabled={running}
-          style={{ ...smallBtnStyle('#2a6b2a', '#8fdb8f'), padding: '6px 16px', opacity: running ? 0.5 : 1 }}
-        >
-          {running ? 'Running…' : 'Run Simulation'}
-        </UIButton>
-      </div>
-
-      {progress && (
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ height: 6, background: '#1a1a2e', borderRadius: 3, overflow: 'hidden' }}>
-            <div style={{
-              height: '100%', width: `${(progress.completed / progress.total) * 100}%`,
-              background: '#66ddaa', transition: 'width 120ms linear',
-            }} />
-          </div>
-          <div style={{ color: '#888', fontSize: 10, marginTop: 4 }}>{progress.completed} / {progress.total} rounds</div>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 18, cursor: 'pointer' }}>
+        <input type="checkbox" checked={bracketMode} onChange={(e) => setBracketMode(e.target.checked)} />
+        <div>
+          <div style={{ color: bracketMode ? '#66ddaa' : '#ccc', fontSize: 12 }}>Bracket view</div>
+          <div style={{ color: '#888', fontSize: 10, marginTop: 1 }}>Define a multi-participant single-elimination bracket instead of a single 1v1</div>
         </div>
+      </label>
+
+      {bracketMode ? (
+        <TournamentBracket ws={ws} />
+      ) : (
+        <>
+          <div style={{ display: 'flex', gap: 16, marginBottom: 18 }}>
+            <SideConfigPanel label="Side A" config={sideA} onChange={setSideA} />
+            <SideConfigPanel label="Side B" config={sideB} onChange={setSideB} />
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+            <span style={{ color: '#aaa', fontSize: 11 }}>Rounds</span>
+            <input
+              type="number" min={1} max={500} value={rounds}
+              onChange={(e) => setRounds(Math.max(1, Math.min(500, Number(e.target.value) || 1)))}
+              style={{ ...selectStyle, width: 70 }}
+            />
+            <UIButton
+              onClick={run}
+              disabled={running}
+              style={{ ...smallBtnStyle('#2a6b2a', '#8fdb8f'), padding: '6px 16px', opacity: running ? 0.5 : 1 }}
+            >
+              {running ? 'Running…' : 'Run Simulation'}
+            </UIButton>
+          </div>
+
+          {progress && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ height: 6, background: '#1a1a2e', borderRadius: 3, overflow: 'hidden' }}>
+                <div style={{
+                  height: '100%', width: `${(progress.completed / progress.total) * 100}%`,
+                  background: '#66ddaa', transition: 'width 120ms linear',
+                }} />
+              </div>
+              <div style={{ color: '#888', fontSize: 10, marginTop: 4 }}>{progress.completed} / {progress.total} rounds</div>
+            </div>
+          )}
+
+          {error && <div style={{ color: '#ff8888', fontSize: 12, marginBottom: 16 }}>{error}</div>}
+
+          {result && <ResultView result={result} classA={sideA.class} classB={sideB.class} />}
+        </>
       )}
-
-      {error && <div style={{ color: '#ff8888', fontSize: 12, marginBottom: 16 }}>{error}</div>}
-
-      {result && <ResultView result={result} classA={sideA.class} classB={sideB.class} />}
     </div>
   );
 }

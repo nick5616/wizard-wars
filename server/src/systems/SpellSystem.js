@@ -21,6 +21,14 @@ export class SpellSystem {
     const spell = getSpell(spellId);
     if (!spell) return this._deny(player, spellId, 'unknown_spell');
 
+    // Bots don't send the continuous per-tick activeSlot a real client does
+    // (see CameraController's input send / Room.processInput), so keep it in
+    // sync with whatever they actually just cast -- otherwise a bot's
+    // sniper-sight aim line (SniperSightLines.tsx) never reflects a spell
+    // outside slot 0. Harmless no-op for human players, who already keep
+    // this current every input tick.
+    player.activeSlot = slotIndex;
+
     // Check alive and class match
     if (!player.isAlive) return this._deny(player, spellId, 'not_alive');
     if (spell.class !== player.class) return this._deny(player, spellId, 'wrong_class');
@@ -135,6 +143,7 @@ export class SpellSystem {
       case 'domain':     this._castDomain(player, spell); break;
       case 'direct':     this._castDirect(player, spell, targetId, clientTimestamp); break;
       case 'mobility':   this._castSlotMobility(player, spell); break;
+      case 'rune':       this._castRune(player, spell, aimDir); break;
       default: break;
     }
 
@@ -196,7 +205,7 @@ export class SpellSystem {
   }
 
   // ── Basic attack (RMB) & melee (F) ──────────────────────────────────────
-  // Universal per-class abilities outside the 4 equip slots -- always
+  // Universal per-class abilities outside the equip slots -- always
   // available from spawn, no unlock needed. Same "outside the slot system"
   // treatment as handleMobility above.
 
@@ -326,7 +335,7 @@ export class SpellSystem {
 
   // ── Hitscan ───────────────────────────────────────────────────────────────
 
-  _castHitscan(player, spell, aimDir, clientTimestamp) {
+  _castHitscan(player, spell, aimDir, clientTimestamp, { skipFlashOnHit = false } = {}) {
     // Determine compensation timestamp
     const compTimestamp = clientTimestamp - (player.rtt / 2);
 
@@ -355,20 +364,25 @@ export class SpellSystem {
       if (result.hit && blockDist !== null && blockDist < result.distance) result.hit = false;
     }
 
-    // Broadcast visual (everyone sees the beam regardless)
-    const flashId = uuid();
-    this.room.effects.set(flashId, {
-      id: flashId,
-      type: 'hitscan_flash',
-      spellId: spell.id,
-      ownerId: player.id,
-      origin: { ...player.position },
-      direction: aimDir,
-      color: spell.color,
-      glowColor: spell.glowColor,
-      createdAt: Date.now(),
-      expiresAt: Date.now() + 500,
-    });
+    // Broadcast visual (everyone sees the beam regardless) — chain lightning
+    // suppresses this on a hit since it draws its own connect-the-dots arc
+    // through every bounce instead (see _castChainHitscan).
+    if (!(skipFlashOnHit && result.hit)) {
+      const flashId = uuid();
+      this.room.effects.set(flashId, {
+        id: flashId,
+        type: 'hitscan_flash',
+        spellId: spell.id,
+        ownerId: player.id,
+        origin: { ...player.position },
+        direction: aimDir,
+        color: spell.color,
+        glowColor: spell.glowColor,
+        createdAt: Date.now(),
+        expiresAt: Date.now() + 500,
+        active: true,
+      });
+    }
 
     if (result.hit) {
       const target = this.room.server.players.get(result.playerId);
@@ -389,7 +403,7 @@ export class SpellSystem {
       if (spell.statusEffect === 'freeze' && spell.statusDuration === 0 && target?.hasEffect('freeze')) {
         dmgMult *= 2.5;
       }
-      const dmg = this.room.applyDamage(result.playerId, Math.round(spell.damage * dmgMult), player.id, spell.id);
+      const dmg = this.room.applyDamage(result.playerId, Math.round(spell.damage * dmgMult), player.id, spell.id, result.isHeadshot);
       if (target && spell.statusEffect) {
         target.applyEffect(spell.statusEffect, spell.statusDuration, 1, player.id);
       }
@@ -416,11 +430,17 @@ export class SpellSystem {
   // rather than re-aimed — the caster aims the first shot, not the chain.
 
   _castChainHitscan(player, spell, aimDir, clientTimestamp) {
-    const firstTargetId = this._castHitscan(player, spell, aimDir, clientTimestamp);
+    // skipFlashOnHit: on an actual hit, the chain's own 'chain_lightning'
+    // effect (built below) draws the full connect-the-dots arc instead of
+    // the generic full-range hitscan tracer.
+    const firstTargetId = this._castHitscan(player, spell, aimDir, clientTimestamp, { skipFlashOnHit: true });
     if (!firstTargetId) return;
 
-    const hitIds = new Set([player.id, firstTargetId]);
+    const points = [{ ...player.position }];
     let fromPos = this.room.server.players.get(firstTargetId)?.position;
+    points.push({ ...fromPos });
+
+    const hitIds = new Set([player.id, firstTargetId]);
     const remainingBounces = Math.max(0, (spell.bounces ?? 1) - 1);
     const maxChainRange = 12;
 
@@ -449,24 +469,26 @@ export class SpellSystem {
         isHeadshot: false,
       });
 
-      const dx = next.position.x - fromPos.x, dz = next.position.z - fromPos.z;
-      const segLen = Math.sqrt(dx * dx + dz * dz) || 1;
-      const flashId = uuid();
-      this.room.effects.set(flashId, {
-        id: flashId,
-        type: 'hitscan_flash',
-        spellId: spell.id,
-        ownerId: player.id,
-        origin: { ...fromPos },
-        direction: { x: dx / segLen, y: 0, z: dz / segLen },
-        color: spell.color,
-        glowColor: spell.glowColor,
-        createdAt: Date.now(),
-        expiresAt: Date.now() + 500,
-      });
-
+      points.push({ ...next.position });
       fromPos = next.position;
     }
+
+    // One effect for the whole chain — the client draws a jagged, crackling
+    // yellow arc through every point instead of a flat straight tracer per
+    // segment, so the bolt visibly connects each bounce target.
+    const chainId = uuid();
+    this.room.effects.set(chainId, {
+      id: chainId,
+      type: 'chain_lightning',
+      spellId: spell.id,
+      ownerId: player.id,
+      points,
+      color: spell.color,
+      glowColor: spell.glowColor,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 450,
+      active: true,
+    });
   }
 
   // ── Beam ─────────────────────────────────────────────────────────────────
@@ -500,10 +522,16 @@ export class SpellSystem {
     const effectId = uuid();
     // Self-centered spells (Blood Nova) land on the caster; line-shaped spells
     // (Fissure) start at the caster's feet and extend out via direction*length;
-    // everything else casts at a fixed distance out along the aim direction.
-    const targetPos = (spell.selfCast || spell.length)
-      ? { x: player.position.x, y: 0, z: player.position.z }
-      : { x: player.position.x + aimDir.x * 12, y: 0, z: player.position.z + aimDir.z * 12 };
+    // everything else casts at a fixed distance out along the aim direction —
+    // unless the spell snaps to a player under the crosshair (Lightning Strike).
+    let targetPos;
+    if (spell.selfCast || spell.length) {
+      targetPos = { x: player.position.x, y: 0, z: player.position.z };
+    } else if (spell.groundSnapToPlayer) {
+      targetPos = this._groundTargetPos(player, aimDir, 12);
+    } else {
+      targetPos = { x: player.position.x + aimDir.x * 12, y: 0, z: player.position.z + aimDir.z * 12 };
+    }
 
     const effect = {
       id: effectId,
@@ -536,6 +564,38 @@ export class SpellSystem {
     if (spell.id === 'immolate') {
       player.immolateActiveUntil = Date.now() + (spell.duration ?? 5) * 1000;
     }
+  }
+
+  // ── Runes ─────────────────────────────────────────────────────────────────
+  // Placed on the ground a short distance out along aim, same fixed-distance
+  // convention as a regular aoe cast. Arms after a brief delay (so the caster
+  // can't detonate it on themselves by walking through it immediately), then
+  // sits live until either the first enemy walks into it (one-shot trigger,
+  // full damage/status/lifesteal via _resolveAoe) or its duration runs out
+  // unfired. See tickEffects for the arm/trigger tick.
+
+  _castRune(player, spell, aimDir) {
+    const id = uuid();
+    const position = { x: player.position.x + aimDir.x * 8, y: 0, z: player.position.z + aimDir.z * 8 };
+
+    this.room.effects.set(id, {
+      id,
+      type: 'rune',
+      spellId: spell.id,
+      ownerId: player.id,
+      position,
+      radius: spell.radius ?? 2,
+      damage: spell.damage,
+      statusEffect: spell.statusEffect,
+      statusDuration: spell.statusDuration,
+      lifesteal: spell.lifesteal ?? 0,
+      shape: 'point',
+      armedAt: Date.now() + (spell.armMs ?? 400),
+      startedAt: Date.now(),
+      expiresAt: Date.now() + (spell.duration ?? 18000),
+      triggered: false,
+      active: true,
+    });
   }
 
   // ── Barriers (Ice Wall, Rock Wall) ──────────────────────────────────────
@@ -595,6 +655,35 @@ export class SpellSystem {
       }
     }
     return { distance, barrier };
+  }
+
+  /**
+   * Ground-target point for aim-and-click aoe spells that snap to a player
+   * under the crosshair (Lightning Strike): if the aim ray hits an enemy's
+   * capsule within maxDist, center on their feet; otherwise fall back to the
+   * normal fixed-distance point along aimDir. Mirrors the client-side preview
+   * reticle's own raycast (see LightningTargetReticle.tsx) so what you see
+   * before casting matches where the spell actually lands.
+   */
+  _groundTargetPos(player, aimDir, maxDist) {
+    const origin = { ...player.position };
+    let nearestDist = null;
+    let nearestPlayer = null;
+    for (const pid of this.room.playerIds) {
+      if (pid === player.id) continue;
+      const target = this.room.server.players.get(pid);
+      if (!target || !target.isAlive) continue;
+      const t = rayIntersectsCylinder(origin, aimDir, {
+        x: target.position.x, z: target.position.z, radius: 0.6,
+        baseY: target.position.y - PLAYER_HEIGHT, height: PLAYER_HEIGHT + 0.3,
+      });
+      if (t !== null && t <= maxDist && (nearestDist === null || t < nearestDist)) {
+        nearestDist = t;
+        nearestPlayer = target;
+      }
+    }
+    if (nearestPlayer) return { x: nearestPlayer.position.x, y: 0, z: nearestPlayer.position.z };
+    return { x: player.position.x + aimDir.x * maxDist, y: 0, z: player.position.z + aimDir.z * maxDist };
   }
 
   // ── Domain ────────────────────────────────────────────────────────────────
@@ -836,7 +925,7 @@ export class SpellSystem {
         }
 
         const dmgMult = isHeadshot ? 1.5 : 0.85;
-        const dmg = this.room.applyDamage(playerId, Math.round(proj.damage * dmgMult), proj.ownerId, proj.spellId);
+        const dmg = this.room.applyDamage(playerId, Math.round(proj.damage * dmgMult), proj.ownerId, proj.spellId, isHeadshot);
         if (proj.statusEffect && target) {
           target.applyEffect(proj.statusEffect, proj.statusDuration, 1, proj.ownerId);
         }
@@ -904,6 +993,22 @@ export class SpellSystem {
 
       if (effect.type === 'beam') {
         this._resolveBeam(effect, now, dt);
+      }
+
+      if (effect.type === 'rune' && !effect.triggered && now >= effect.armedAt) {
+        let steppedOn = false;
+        for (const pid of this.room.playerIds) {
+          if (pid === effect.ownerId) continue;
+          const p = this.room.server.players.get(pid);
+          if (p?.isAlive && this._effectContainsPoint(effect, p.position)) { steppedOn = true; break; }
+        }
+        if (steppedOn) {
+          effect.triggered = true;
+          this._resolveAoe(effect, now);
+          // Keep it around briefly so the trigger burst has time to play
+          // client-side, instead of vanishing the instant it deals damage.
+          effect.expiresAt = now + 400;
+        }
       }
 
       if (effect.type === 'amaterasu') {
@@ -1067,7 +1172,7 @@ export class SpellSystem {
     const owner = this.room.server.players.get(effect.ownerId);
 
     for (const pid of this.room.playerIds) {
-      if (pid === effect.ownerId && !isLinger) continue;
+      if (pid === effect.ownerId && (!isLinger || effect.excludeOwner)) continue;
       const player = this.room.server.players.get(pid);
       if (!player || !player.isAlive) continue;
 
@@ -1118,6 +1223,17 @@ export class SpellSystem {
   _resolveBeam(effect, now, dt) {
     const owner = this.room.server.players.get(effect.ownerId);
     if (!owner) return;
+
+    // Beams track the caster's current look direction every tick instead of
+    // the aim direction frozen at cast time — previously a beam fired at one
+    // spot stayed locked there for its whole duration regardless of where the
+    // caster turned. Mutating effect.direction here also updates what's
+    // broadcast to clients, so the visual (BeamSpell.tsx) follows along too.
+    effect.direction = {
+      x: -Math.sin(owner.yaw) * Math.cos(owner.pitch),
+      y: Math.sin(owner.pitch),
+      z: -Math.cos(owner.yaw) * Math.cos(owner.pitch),
+    };
 
     const spell = getSpell(effect.spellId);
     let blockDist = null;
@@ -1184,7 +1300,9 @@ export class SpellSystem {
     player.position.x += dir.x * dashDist;
     player.position.z += dir.z * dashDist;
 
-    // Leave burn trail as AoE
+    // Leave burn trail as AoE — excludeOwner so the caster doesn't repeatedly
+    // burn themselves for standing in the middle of their own landing spot
+    // (see _resolveAoe's isLinger handling).
     const trailId = uuid();
     this.room.effects.set(trailId, {
       id: trailId,
@@ -1193,7 +1311,7 @@ export class SpellSystem {
       ownerId: player.id,
       position: { ...player.position },
       radius: 2,
-      damage: 15,
+      damage: spell.damage,
       statusEffect: 'burn',
       statusDuration: 1500,
       windupMs: 0,
@@ -1202,6 +1320,7 @@ export class SpellSystem {
       activatesAt: Date.now(),
       expiresAt: Date.now() + 2000,
       triggered: false,
+      excludeOwner: true,
       active: true,
     });
   }
@@ -1212,7 +1331,8 @@ export class SpellSystem {
     player.position.x += dir.x * dist;
     player.position.z += dir.z * dist;
 
-    // Frost landing zone
+    // Frost landing zone — excludeOwner so dashing here doesn't immediately
+    // re-slow the caster standing in the middle of it (see _resolveAoe).
     const frostId = uuid();
     this.room.effects.set(frostId, {
       id: frostId,
@@ -1230,6 +1350,7 @@ export class SpellSystem {
       activatesAt: Date.now(),
       expiresAt: Date.now() + 4000,
       triggered: false,
+      excludeOwner: true,
       active: true,
     });
   }
@@ -1279,7 +1400,7 @@ export class SpellSystem {
       ownerId: player.id,
       position: { ...player.position },
       radius: 3,
-      damage: 20,
+      damage: spell.damage,
       statusEffect: null,
       statusDuration: 0,
       windupMs: 0,

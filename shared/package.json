@@ -10,6 +10,7 @@
     "./spells": "./spells.js",
     "./gameConfig": "./gameConfig.js",
     "./skillTrees": "./skillTrees.js",
+    "./classFlavor": "./classFlavor.js",
     "./leveling": "./leveling.js",
     "./mapLayout": "./mapLayout.js"
   }

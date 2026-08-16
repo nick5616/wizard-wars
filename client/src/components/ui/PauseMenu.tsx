@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useGameStore } from '../../stores/gameStore';
 import { useNetworkStore } from '../../stores/networkStore';
-import { getSpell, MOBILITY_SPELL } from 'shared/spells';
+import { getSpell, MOBILITY_SPELL, MAX_SPELL_SLOTS, isEquippableSpell } from 'shared/spells';
 import type { WebSocketClient } from '../../networking/WebSocketClient';
 import type { WizardClass } from '../../types/game.types';
 import { UIButton } from './UIButton';
@@ -15,6 +15,8 @@ const CLASS_COLORS: Record<WizardClass, string> = {
 const SKILL_DESCRIPTIONS: Record<string, { label: string; description: string }> = {
   ember_flick:    { label: 'Ember Flick',       description: 'Fast projectile warning shot.' },
   spark_shot:     { label: 'Spark Shot',        description: 'Rapid-fire sparks. 0.12s cooldown. Machine-gun fire.' },
+  rune_ember:     { label: 'Ember Rune',        description: 'Place a rune. Detonates on the first enemy to step in it. Damage + burn.' },
+  rune_magma:     { label: 'Magma Rune',        description: 'Powerful rune. Massive damage + burn on trigger.' },
   kindling:       { label: 'Kindling',           description: '+10% damage per Ember Flick hit, stacks 3×.' },
   fireball:       { label: 'Fireball',           description: 'Heavy explosive projectile. The fire class identity.' },
   combustion:     { label: 'Combustion',         description: 'All fire spells apply burn, stacks 3×.' },
@@ -46,6 +48,8 @@ const SKILL_DESCRIPTIONS: Record<string, { label: string; description: string }>
   absolute_zero:  { label: 'Absolute Zero',      description: 'Domain: near-total stillness. 3s. Telegraphed.' },
   hypothermia:    { label: 'Hypothermia',        description: 'Enemies exiting Absolute Zero stay slowed 2s.' },
   divine_judgement: { label: 'Divine Judgement', description: 'Silent. Perfect. Frozen targets shatter instantly.' },
+  rune_rime:      { label: 'Rime Rune',          description: 'Place a rune. Detonates on the first enemy to step in it. Damage + slow.' },
+  rune_glacier:   { label: 'Glacier Rune',       description: 'Powerful rune. Massive damage + full freeze on trigger.' },
   void_touch:     { label: 'Void Touch',         description: 'Short range dark pulse. Cosmically wrong.' },
   void_tap:       { label: 'Void Tap',           description: 'Point-blank void strike. 0.1s cooldown. Melee pace.' },
   unnerving:      { label: 'Unnerving Presence', description: 'Nearby enemies have degraded movement accuracy.' },
@@ -65,6 +69,8 @@ const SKILL_DESCRIPTIONS: Record<string, { label: string; description: string }>
   null_gaze:      { label: 'Null Gaze',          description: 'Hitscan through walls. Leaves void trail 3s.' },
   the_abyss:      { label: 'The Abyss',          description: 'After Null Gaze, next spell is free and instant.' },
   death_note:     { label: 'Death Note',         description: 'Write their name. They die. Once per life.' },
+  rune_hex:       { label: 'Hex Rune',           description: 'Place a rune. Detonates on the first enemy to step in it. Heals you on trigger.' },
+  rune_soul:      { label: 'Soul Rune',          description: 'Powerful rune. Massive damage. Heavily heals you on trigger.' },
   iron_edge:      { label: 'Iron Edge',          description: 'Quick slash. Crisp. Immediate. No nonsense.' },
   quick_cut:      { label: 'Quick Cut',          description: 'Blindingly fast slash. 0.09s cooldown. Almost no pause between swings.' },
   footwork:       { label: 'Footwork',           description: 'Slightly increased base movement speed.' },
@@ -83,6 +89,8 @@ const SKILL_DESCRIPTIONS: Record<string, { label: string; description: string }>
   the_last_word:  { label: 'The Last Word',      description: 'Domain: time slows for all but you. 3s.' },
   final_form:     { label: 'Final Form',         description: 'During The Last Word, every hit deals double damage.' },
   gods_edge:      { label: "God's Edge",         description: 'Hitscan. Cuts clean. Bypasses Parry.' },
+  rune_snare:     { label: 'Snare Rune',         description: 'Place a rune. Detonates on the first enemy to step in it. Damage + stun.' },
+  rune_executioner: { label: "Executioner's Rune", description: 'Powerful rune. Massive damage + long stun on trigger.' },
   pebble_shot:    { label: 'Pebble Shot',        description: 'Small fast rock. Humble. Accurate. Do not underestimate.' },
   dirt_clod:      { label: 'Dirt Clod',          description: '3-shot scatter burst. 0.18s cooldown. Fires rapidly.' },
   earthen_skin:   { label: 'Earthen Skin',       description: '-5% damage received. -10% below half HP.' },
@@ -99,6 +107,8 @@ const SKILL_DESCRIPTIONS: Record<string, { label: string; description: string }>
   terra_domain:   { label: 'Terra Domain',       description: 'Domain: stone spires erupt randomly. 5s. You are immune.' },
   tectonic:       { label: 'Tectonic',           description: 'After Terra Domain, Bedrock activates instantly.' },
   the_monolith:   { label: 'The Monolith',       description: 'Hitscan. Visible 1s before firing. Hits like geology.' },
+  rune_root:      { label: 'Root Rune',          description: 'Place a rune. Detonates on the first enemy to step in it. Damage + stun.' },
+  rune_seismic:   { label: 'Seismic Rune',       description: 'Powerful rune. Massive damage + stun in a huge radius.' },
 };
 
 type Tab = 'spells' | 'glossary' | 'settings';
@@ -263,12 +273,17 @@ function SpellsTab({ local, mobilitySpell, classColor, ws }: {
 
   const equippableIds = local.unlockedNodes.filter(id => {
     const s = getSpell(id);
-    return s && s.class === local.class && s.type !== 'passive' && s.type !== 'mobility';
+    return s && s.class === local.class && isEquippableSpell(s);
   });
+  // Slots open one-by-one as spells unlock, capped at MAX_SPELL_SLOTS (keys 1-9,0).
+  const visibleSlots = Math.min(equippableIds.length, MAX_SPELL_SLOTS);
 
   function equipSpell(spellId: string | null) {
     ws.send(C2S.EQUIP_SPELL, { slotIndex: selectedSlot, spellId });
   }
+
+  // Slot keys read 1-9 then 0, matching the "1234567890" top-row layout.
+  const slotLabel = (i: number) => (i < 9 ? i + 1 : 0);
 
   return (
     <div>
@@ -277,7 +292,7 @@ function SpellsTab({ local, mobilitySpell, classColor, ws }: {
         Spell Slots — click to select
       </div>
       <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
-        {local.equippedSpells.map((spellId, i) => {
+        {local.equippedSpells.slice(0, visibleSlots).map((spellId, i) => {
           const spell = spellId ? getSpell(spellId) : null;
           const isSelected = selectedSlot === i;
           return (
@@ -295,7 +310,7 @@ function SpellsTab({ local, mobilitySpell, classColor, ws }: {
                 transition: 'all 0.12s',
               }}
             >
-              <div style={{ color: isSelected ? classColor : '#666', fontSize: 9, letterSpacing: 2, marginBottom: 5 }}>SLOT {i + 1}</div>
+              <div style={{ color: isSelected ? classColor : '#666', fontSize: 9, letterSpacing: 2, marginBottom: 5 }}>SLOT {slotLabel(i)}</div>
               {spell ? (
                 <>
                   <div style={{ width: 8, height: 8, borderRadius: '50%', background: spell.color, margin: '0 auto 5px', boxShadow: `0 0 5px ${spell.glowColor}` }} />
@@ -329,7 +344,7 @@ function SpellsTab({ local, mobilitySpell, classColor, ws }: {
             textTransform: 'uppercase',
           }}
         >
-          Clear slot {selectedSlot + 1}
+          Clear slot {slotLabel(selectedSlot)}
         </UIButton>
       )}
       {!local.equippedSpells[selectedSlot] && <div style={{ marginBottom: 18 }} />}
@@ -353,7 +368,7 @@ function SpellsTab({ local, mobilitySpell, classColor, ws }: {
 
       {/* Unlocked spells list */}
       <div style={{ color: '#aaa', fontSize: 10, letterSpacing: 3, textTransform: 'uppercase', marginBottom: 10 }}>
-        Unlocked Spells — click to equip into slot {selectedSlot + 1}
+        Unlocked Spells — click to equip into slot {slotLabel(selectedSlot)}
       </div>
 
       {equippableIds.length === 0 ? (

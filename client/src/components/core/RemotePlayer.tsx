@@ -6,6 +6,8 @@ import type { PlayerState } from '../../types/game.types';
 import { PLAYER_HEIGHT } from 'shared/constants';
 import { hatScaleForLevel } from 'shared/leveling';
 import { registerTarget, unregisterTarget } from '../../networking/targetRegistry';
+import { ArmAndWand } from './ArmAndWand';
+import { useCastAnimation } from '../../hooks/useCastAnimation';
 
 // Must mirror the private HAT_CONE_* / HAT_BASE_LOCAL_Y constants in
 // shared/leveling.js so the rendered hat lines up with where the server
@@ -46,6 +48,7 @@ export function RemotePlayer({ playerId, interpolation, serverNow, initialState 
   const baseColor = CLASS_COLORS[initialState.class ?? 'default'] ?? CLASS_COLORS.default;
   const color = initialState.isBot ? darken(baseColor, 0.55) : baseColor;
   const hatScale = hatScaleForLevel(initialState.level ?? 1);
+  const castAnimRef = useCastAnimation(playerId);
 
   useEffect(() => {
     if (groupRef.current) registerTarget(playerId, groupRef.current);
@@ -56,7 +59,7 @@ export function RemotePlayer({ playerId, interpolation, serverNow, initialState 
     const interp = interpolation.getInterpolated(playerId, serverNow());
     if (!interp || !groupRef.current) return;
 
-    if (!interp.isAlive) {
+    if (!interp.isAlive || interp.isChoosingBranch) {
       groupRef.current.visible = false;
       return;
     }
@@ -98,6 +101,9 @@ export function RemotePlayer({ playerId, interpolation, serverNow, initialState 
 
       {/* Class glow */}
       <pointLight position={[0, 1.5, 0]} intensity={0.5} distance={3} color={color} />
+
+      {/* Arm + wand — pose reacts to whatever spell type was just cast */}
+      <ArmAndWand color={color} castAnimRef={castAnimRef} />
 
       {/* Bot marker: a small dark ring at the feet — desaturated color alone reads as "off" at a distance, this makes it explicit */}
       {initialState.isBot && (

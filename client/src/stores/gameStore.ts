@@ -3,6 +3,7 @@ import type {
   PlayerState, ProjectileState, EffectState, DomainState, BarrierState,
   Vec3, KillFeedEntry, WizardClass,
 } from '../types/game.types';
+import { MAX_SPELL_SLOTS } from 'shared/spells';
 
 interface LocalPlayerState {
   health: number;
@@ -110,13 +111,17 @@ interface GameState {
   // arena instead of following the local player.
   birdsEyeView: boolean;
   setBirdsEyeView: (v: boolean) => void;
+
+  // Third-person chase camera, toggled with the middle mouse button.
+  thirdPerson: boolean;
+  setThirdPerson: (v: boolean) => void;
 }
 
 const defaultLocal: LocalPlayerState = {
   health: 200,
   maxHealth: 200,
   class: null,
-  equippedSpells: [null, null, null, null],
+  equippedSpells: Array(MAX_SPELL_SLOTS).fill(null),
   activeSlot: 0,
   cooldowns: {},
   mobilityCD: 0,
@@ -149,6 +154,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   menuOpen: false,
   debugMode: false,
   birdsEyeView: false,
+  thirdPerson: false,
 
   setPhase: (phase) => set({ phase }),
 
@@ -252,4 +258,5 @@ export const useGameStore = create<GameState>((set, get) => ({
   setMenuOpen: (v) => set({ menuOpen: v }),
   setDebugMode: (v) => set({ debugMode: v }),
   setBirdsEyeView: (v) => set({ birdsEyeView: v }),
+  setThirdPerson: (v) => set({ thirdPerson: v }),
 }));

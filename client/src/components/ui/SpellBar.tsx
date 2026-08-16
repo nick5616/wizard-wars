@@ -1,5 +1,5 @@
 import { useGameStore } from '../../stores/gameStore';
-import { getSpell, MOBILITY_SPELL } from 'shared/spells';
+import { getSpell, MOBILITY_SPELL, MAX_SPELL_SLOTS, isEquippableSpell } from 'shared/spells';
 import { SpellTypeIcon } from './SpellTypeIcon';
 
 export function SpellBar() {
@@ -10,6 +10,14 @@ export function SpellBar() {
   const mobilityCD = mobilitySpellId ? (local.cooldowns[mobilitySpellId] ?? 0) : 0;
   const mobilityCDSec = mobilityCD / 1000;
   const mobilityCDPct = mobilitySpell ? mobilityCDSec / mobilitySpell.cooldown : 0;
+
+  // Only show as many slots as spells unlocked so far -- the 5th slot opens
+  // once a 5th spell is unlocked, and so on up to MAX_SPELL_SLOTS.
+  const unlockedCount = local.unlockedNodes.filter((id) => {
+    const s = getSpell(id);
+    return s && s.class === local.class && isEquippableSpell(s);
+  }).length;
+  const visibleSlots = Math.min(unlockedCount, MAX_SPELL_SLOTS);
 
   return (
     <div style={{
@@ -91,7 +99,7 @@ export function SpellBar() {
         )}
       </div>
 
-      {local.equippedSpells.map((spellId, i) => {
+      {local.equippedSpells.slice(0, visibleSlots).map((spellId, i) => {
         const spell = spellId ? getSpell(spellId) : null;
         const cd = spellId ? (local.cooldowns[spellId] ?? 0) : 0;
         const cdSec = cd / 1000;
@@ -183,7 +191,7 @@ export function SpellBar() {
               fontSize: 11,
               color: '#888',
             }}>
-              {i + 1}
+              {i < 9 ? i + 1 : 0}
             </div>
 
             {/* Spell type icon */}

@@ -1,5 +1,5 @@
 import { PLAYER_MAX_HEALTH, BASE_MOVE_SPEED, PLAYER_HEIGHT, RESPAWN_DELAY, DEATH_NOTE_DAMAGE_WINDOW } from 'shared/constants';
-import { DEFAULT_EQUIPPED, MOBILITY_SPELL } from 'shared/spells';
+import { DEFAULT_EQUIPPED, MOBILITY_SPELL, MAX_SPELL_SLOTS } from 'shared/spells';
 import { STATUS_EFFECTS } from 'shared/gameConfig';
 
 export class Player {
@@ -30,7 +30,8 @@ export class Player {
     this.isGrounded = false;
 
     // Spells
-    this.equippedSpells = [null, null, null, null]; // 4 active slots
+    this.equippedSpells = Array(MAX_SPELL_SLOTS).fill(null); // up to 10 active slots, opened as spells unlock
+    this.activeSlot = 0; // currently selected hotbar slot -- drives the sniper-sight aim line
     this.mobilitySpell = null;
     this.cooldowns = new Map(); // spellId → expiry timestamp
 
@@ -89,6 +90,11 @@ export class Player {
     // Windup-cast in progress (death_note, petrify, cryo_lance, siege_blade, the_monolith, ...)
     // { spellId, spell, aimDir, targetId, clientTimestamp, readyAt, interruptible }
     this.pendingCast = null;
+
+    // True while a skill-tree fork vote is open for this player -- input is
+    // ignored and the player is hidden from the arena (see Room.processInput
+    // / RemotePlayer.tsx) until they resolve it. See ProgressionSystem._openVote.
+    this.isChoosingBranch = false;
   }
 
   selectClass(className) {
@@ -127,6 +133,7 @@ export class Player {
     this.ironWillExpiry = 0;
     this.crimsonVeilExpiry = 0;
     this.hasAbyssFreeCast = false;
+    this.isChoosingBranch = false;
     this.sovereignCutReadyBonus = 0;
     this.empoweredSlashReady = false;
     this.pendingCast = null;
@@ -227,6 +234,8 @@ export class Player {
       yaw: this.yaw,
       pitch: this.pitch,
       equippedSpells: this.equippedSpells,
+      activeSlot: this.activeSlot,
+      isChoosingBranch: this.isChoosingBranch,
       cooldowns: cooldownData,
       activeEffects: effects,
       skillPoints: this.skillPoints,

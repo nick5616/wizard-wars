@@ -37,6 +37,7 @@ export const S2C = {
   DOMAIN_START:     's2c:domain_start',
   DOMAIN_END:       's2c:domain_end',
   KILL_FEED:        's2c:kill_feed',
+  COMBAT_LOG:       's2c:combat_log',   // Experiment Lab: live hit/kill log for bot-involved fights
   SKILL_BOUGHT:     's2c:skill_bought',
   LEVEL_UP:         's2c:level_up',
   HAT_BUFF_PROC:    's2c:hat_buff_proc',

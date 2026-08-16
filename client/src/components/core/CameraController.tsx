@@ -20,6 +20,7 @@ import { PLAYER_HEIGHT, CAST_MAX_RANGE, ARENA_RADIUS } from 'shared/constants';
 import { MOBILITY_SPELL, BASIC_ATTACK, MELEE_ATTACK, getSpell } from 'shared/spells';
 import { getTargetObjects } from '../../networking/targetRegistry';
 import { audioManager } from '../../audio/AudioManager';
+import { localOrientation } from '../../networking/localOrientation';
 
 const MOUSE_SENSITIVITY = 0.002;
 
@@ -41,7 +42,8 @@ interface Props {
 export function CameraController({ ws, prediction }: Props) {
   const { camera } = useThree();
   const { movement } = useKeyboardControls();
-  const { isLocked, consumeDelta, lmbRef, rmbRef } = useMouseControls();
+  const { isLocked, consumeDelta, lmbRef, rmbRef, mmbRef } = useMouseControls();
+  const wasMmbRef = useRef(false);
   const euler = useRef(new THREE.Euler(0, 0, 0, 'YXZ'));
   const yawRef = useRef(0);
   const pitchRef = useRef(0);
@@ -110,6 +112,14 @@ export function CameraController({ ws, prediction }: Props) {
       return;
     }
 
+    // Middle mouse button: toggle third-person (edge-triggered on press)
+    const mmbFired = mmbRef.current && !wasMmbRef.current;
+    wasMmbRef.current = mmbRef.current;
+    if (mmbFired) {
+      const { thirdPerson, setThirdPerson } = useGameStore.getState();
+      setThirdPerson(!thirdPerson);
+    }
+
     const { localPlayerId } = useNetworkStore.getState();
 
     // On spawn/respawn: snap camera to the server-provided position so projectiles
@@ -139,6 +149,8 @@ export function CameraController({ ws, prediction }: Props) {
       euler.current.set(pitchRef.current, yawRef.current, 0, 'YXZ');
       camera.quaternion.setFromEuler(euler.current);
     }
+    localOrientation.yaw = yawRef.current;
+    localOrientation.pitch = pitchRef.current;
 
     // ── Client-side prediction ──────────────────────────────────────────────
     let flags = 0;
@@ -156,7 +168,21 @@ export function CameraController({ ws, prediction }: Props) {
     posRef.current = result.pos;
     velRef.current = result.vel;
 
-    camera.position.set(result.pos.x, result.pos.y + 0.1, result.pos.z);
+    if (useGameStore.getState().thirdPerson) {
+      // Chase cam: same look direction as first-person, just pulled back
+      // behind the player's head so their own model (see LocalPlayerModel)
+      // is visible.
+      const fwd = new THREE.Vector3();
+      camera.getWorldDirection(fwd);
+      const dist = 4.2, heightUp = 0.5;
+      camera.position.set(
+        result.pos.x - fwd.x * dist,
+        result.pos.y + heightUp - fwd.y * dist,
+        result.pos.z - fwd.z * dist,
+      );
+    } else {
+      camera.position.set(result.pos.x, result.pos.y + 0.1, result.pos.z);
+    }
     setLocalPosition(result.pos);
 
     // ── Send input to server at 64Hz ────────────────────────────────────────
@@ -183,7 +209,12 @@ export function CameraController({ ws, prediction }: Props) {
           // targetId server-side -- raycast the crosshair against known remote players.
           const spellDef = getSpell(spellId);
           if (spellDef?.requiresTarget) {
-            raycasterRef.current.set(camera.position, fwd);
+            // Ray from the actual eye position, not camera.position -- in
+            // third-person the camera sits behind the player, and raycasting
+            // from there would offset targeting (and could occlude on the
+            // player's own third-person model).
+            const eyePos = new THREE.Vector3(posRef.current.x, posRef.current.y, posRef.current.z);
+            raycasterRef.current.set(eyePos, fwd);
             raycasterRef.current.far = CAST_MAX_RANGE;
             const hits = raycasterRef.current.intersectObjects(getTargetObjects(), true);
             const targetId = hits.length > 0 ? resolvePlayerIdFromHit(hits[0].object) : undefined;
@@ -249,6 +280,7 @@ export function CameraController({ ws, prediction }: Props) {
         mobility: mobilityFired,
         basicAttack,
         melee,
+        activeSlot: local.activeSlot,
       });
 
       prediction.store({

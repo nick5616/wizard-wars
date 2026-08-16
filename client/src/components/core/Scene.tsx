@@ -7,8 +7,11 @@ import { Canvas } from '@react-three/fiber';
 import { Arena } from './Arena';
 import { CameraController } from './CameraController';
 import { RemotePlayer } from './RemotePlayer';
+import { LocalPlayerModel } from './LocalPlayerModel';
 import { SpellRenderer } from '../spells/SpellRenderer';
 import { DamageNumbers } from '../spells/DamageNumbers';
+import { AoeTargetReticle } from '../spells/AoeTargetReticle';
+import { SniperSightLines } from '../spells/SniperSightLines';
 import { TremorSense } from './TremorSense';
 import { useGameStore } from '../../stores/gameStore';
 import { useNetworkStore } from '../../stores/networkStore';
@@ -24,6 +27,7 @@ interface SceneProps {
 
 export function Scene({ ws, prediction, interpolation }: SceneProps) {
   const players = useGameStore((s) => s.players);
+  const thirdPerson = useGameStore((s) => s.thirdPerson);
   const { localPlayerId } = useNetworkStore();
 
   const remotePlayers = useMemo(
@@ -44,6 +48,9 @@ export function Scene({ ws, prediction, interpolation }: SceneProps) {
         <SpellRenderer />
         <DamageNumbers />
         <TremorSense />
+        <AoeTargetReticle />
+        <SniperSightLines />
+        {thirdPerson && <LocalPlayerModel />}
 
         {remotePlayers.map(player => (
           <RemotePlayer

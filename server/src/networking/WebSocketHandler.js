@@ -1,6 +1,7 @@
 import { C2S, S2C } from 'shared/events';
 import { getNode, canUnlockNode } from 'shared/skillTrees';
 import { CLASSES } from 'shared/constants';
+import { MAX_SPELL_SLOTS } from 'shared/spells';
 
 export class WebSocketHandler {
   constructor(server) {
@@ -18,7 +19,7 @@ export class WebSocketHandler {
       case C2S.BUY_SKILL_NODE: this._handleBuyNode(player, msg); break;
       case C2S.RESPAWN:        this._handleRespawn(player, msg); break;
       case C2S.SKILL_VOTE_RESOLVE: this._handleVoteResolve(player, msg); break;
-      case C2S.DEBUG_GRANT:    player.skillPoints += 999; break;
+      case C2S.DEBUG_GRANT:    this._handleDebugGrant(player); break;
       case C2S.SPAWN_BOTS:     this._handleSpawnBots(player, msg); break;
       case C2S.DESPAWN_BOTS:   this._handleDespawnBots(player, msg); break;
       case C2S.SPAWN_BOT:        this._handleSpawnBot(player, msg); break;
@@ -81,6 +82,9 @@ export class WebSocketHandler {
     const validClasses = ['fire', 'ice', 'dark', 'sword', 'earth'];
     if (!validClasses.includes(msg.class)) return;
 
+    if (typeof msg.username === 'string' && msg.username.trim()) {
+      player.username = msg.username.trim().slice(0, 20);
+    }
     player.selectClass(msg.class);
 
     const room = player.roomId ? this.server.rooms.get(player.roomId) : null;
@@ -109,15 +113,24 @@ export class WebSocketHandler {
       mobility: msg.mobility ?? false,
       basicAttack: msg.basicAttack ?? null,
       melee: msg.melee ?? null,
+      activeSlot: msg.activeSlot,
     });
   }
 
   _handleEquipSpell(player, msg) {
     const { slotIndex, spellId } = msg;
-    if (slotIndex < 0 || slotIndex > 3) return;
+    if (slotIndex < 0 || slotIndex >= MAX_SPELL_SLOTS) return;
     if (spellId !== null && !player.unlockedNodes.has(spellId)) return;
 
     player.equippedSpells[slotIndex] = spellId;
+  }
+
+  /** Debug mode: grant points and immediately walk the whole tree, auto-resolving any fork instantly instead of waiting on the normal 12s vote timeout, so toggling it on unlocks (and equips) everything right away. */
+  _handleDebugGrant(player) {
+    player.skillPoints += 999;
+    if (!player.class) return;
+    const room = player.roomId ? this.server.rooms.get(player.roomId) : null;
+    room?.progressionSystem.forceUnlockAll(player);
   }
 
   _handleBuyNode(player, msg) {

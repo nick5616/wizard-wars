@@ -1,12 +1,15 @@
 import { useGameStore } from '../../stores/gameStore';
 import { useNetworkStore } from '../../stores/networkStore';
+import { classFlavor } from 'shared/classFlavor';
 import { Crosshair } from './Crosshair';
 import { HealthBar } from './HealthBar';
 import { ExpBar } from './ExpBar';
 import { SpellBar } from './SpellBar';
 import { KillFeed } from './KillFeed';
+import { CombatLogHUD } from './CombatLog';
+import type { WebSocketClient } from '../../networking/WebSocketClient';
 
-export function HUD() {
+export function HUD({ ws }: { ws: WebSocketClient }) {
   const { local, phase } = useGameStore();
   const { rtt } = useNetworkStore();
 
@@ -19,6 +22,7 @@ export function HUD() {
       <HealthBar />
       <SpellBar />
       <KillFeed />
+      <CombatLogHUD ws={ws} />
 
       {/* Kill count */}
       <div style={{
@@ -38,22 +42,29 @@ export function HUD() {
       {/* Fire Solar Flare: brief blind flash when hit by a caster with the passive */}
       <BlindFlash />
 
-      {/* Class badge */}
-      {local.class && (
-        <div style={{
-          position: 'fixed',
-          top: 12,
-          right: 12,
-          fontSize: 13,
-          color: '#aaa',
-          textTransform: 'uppercase',
-          letterSpacing: 3,
-          pointerEvents: 'none',
-          zIndex: 100,
-        }}>
-          {local.class}
-        </div>
-      )}
+      {/* Class badge — symbol/title evolve once you commit to a skill tree fork */}
+      {local.class && (() => {
+        const flavor = classFlavor(local.class, local.divergedBranch);
+        return (
+          <div style={{
+            position: 'fixed',
+            top: 12,
+            right: 12,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            fontSize: 13,
+            color: '#aaa',
+            textTransform: 'uppercase',
+            letterSpacing: 3,
+            pointerEvents: 'none',
+            zIndex: 100,
+          }}>
+            <span style={{ fontSize: 15 }}>{flavor.symbol}</span>
+            <span>{flavor.title}</span>
+          </div>
+        );
+      })()}
 
     </>
   );

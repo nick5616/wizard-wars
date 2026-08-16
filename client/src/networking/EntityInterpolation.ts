@@ -14,6 +14,7 @@ interface Sample {
   pitch: number;
   health: number;
   isAlive: boolean;
+  isChoosingBranch: boolean;
 }
 
 export class EntityInterpolation {
@@ -30,6 +31,7 @@ export class EntityInterpolation {
       pitch: state.pitch,
       health: state.health,
       isAlive: state.isAlive,
+      isChoosingBranch: !!state.isChoosingBranch,
     });
     // Keep last 60 samples (~1s at 64Hz)
     if (buf.length > 60) buf.shift();
@@ -67,6 +69,7 @@ export class EntityInterpolation {
       pitch: lerp(before.pitch, after.pitch, clampedT),
       health: lerp(before.health, after.health, clampedT),
       isAlive: before.isAlive,
+      isChoosingBranch: before.isChoosingBranch,
     };
   }
 

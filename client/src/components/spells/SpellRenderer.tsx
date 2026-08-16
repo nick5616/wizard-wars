@@ -11,6 +11,9 @@ import { MeleeSwing } from './MeleeSwing';
 import { BarrierRenderer } from './BarrierRenderer';
 import { AoeSpell } from './AoeSpell';
 import { AmaterasuSpell } from './AmaterasuSpell';
+import { LightningStrikeSpell } from './LightningStrikeSpell';
+import { ChainLightningArc } from './ChainLightningArc';
+import { RuneSpell } from './RuneSpell';
 
 export function SpellRenderer() {
   const projectiles = useGameStore((s) => s.projectiles);
@@ -42,10 +45,18 @@ export function SpellRenderer() {
           return <MeleeSwing key={effect.id} effect={effect} />;
         }
         if (effect.type === 'aoe') {
-          return <AoeSpell key={effect.id} effect={effect} />;
+          return effect.spellId === 'lightning_strike'
+            ? <LightningStrikeSpell key={effect.id} effect={effect} />
+            : <AoeSpell key={effect.id} effect={effect} />;
         }
         if (effect.type === 'amaterasu') {
           return <AmaterasuSpell key={effect.id} effect={effect} />;
+        }
+        if (effect.type === 'chain_lightning') {
+          return <ChainLightningArc key={effect.id} effect={effect} />;
+        }
+        if (effect.type === 'rune') {
+          return <RuneSpell key={effect.id} effect={effect} />;
         }
         return null;
       })}

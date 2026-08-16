@@ -6,6 +6,7 @@ import { ALL_SPELLS } from 'shared/spells';
 import { SKILL_TREES as SHARED_SKILL_TREES } from 'shared/skillTrees';
 import type { WizardClass } from '../../types/game.types';
 import { UIButton } from './UIButton';
+import { SpellTypeGlyph, iconKindForSpellId } from './SpellTypeIcon';
 
 interface SkillNode {
   id: string;
@@ -324,9 +325,14 @@ export function SkillTree({ ws, onClose }: SkillTreeProps) {
                     strokeWidth={isHovered ? 2 : 1.5}
                     style={{ transition: 'all 0.12s' }}
                   />
-                  <text textAnchor="middle" dy="4" fontSize={isHovered ? 13 : 11} fill={textColor} style={{ userSelect: 'none' }}>
-                    {node.type === 'spell' ? '◆' : '◇'}
-                  </text>
+                  <svg
+                    x={isHovered ? -8 : -6.5} y={isHovered ? -8 : -6.5}
+                    width={isHovered ? 16 : 13} height={isHovered ? 16 : 13}
+                    viewBox="0 0 24 24" fill="none" stroke={textColor} strokeWidth={2}
+                    strokeLinecap="round" strokeLinejoin="round"
+                  >
+                    <SpellTypeGlyph kind={iconKindForSpellId(node.id)} />
+                  </svg>
                   <text textAnchor="middle" dy={26} fontSize={9} fill={textColor} style={{ userSelect: 'none' }}>
                     {node.label}
                   </text>

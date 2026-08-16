@@ -13,6 +13,7 @@ export function useMouseControls() {
   const delta = useRef({ x: 0, y: 0 });
   const lmbRef = useRef(false);
   const rmbRef = useRef(false);
+  const mmbRef = useRef(false);
 
   const onMouseMove = useCallback((e: MouseEvent) => {
     if (!document.pointerLockElement) return;
@@ -23,6 +24,7 @@ export function useMouseControls() {
   const onMouseDown = useCallback((e: MouseEvent) => {
     if (e.button === 0) lmbRef.current = true;
     if (e.button === 2) rmbRef.current = true;
+    if (e.button === 1) { mmbRef.current = true; e.preventDefault(); } // middle click: don't let the OS autoscroll icon pop up
 
     // Only acquire pointer lock when clicking the canvas itself — not UI overlays.
     // This lets modal buttons receive clicks normally.
@@ -34,6 +36,7 @@ export function useMouseControls() {
   const onMouseUp = useCallback((e: MouseEvent) => {
     if (e.button === 0) lmbRef.current = false;
     if (e.button === 2) rmbRef.current = false;
+    if (e.button === 1) mmbRef.current = false;
   }, []);
 
   const onLockChange = useCallback(() => {
@@ -66,5 +69,5 @@ export function useMouseControls() {
     return d;
   }
 
-  return { isLocked, consumeDelta, lmbRef, rmbRef };
+  return { isLocked, consumeDelta, lmbRef, rmbRef, mmbRef };
 }
