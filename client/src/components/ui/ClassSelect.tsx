@@ -9,12 +9,12 @@ interface ClassSelectProps {
   onSelected: (c: WizardClass) => void;
 }
 
-const CLASSES: { id: WizardClass; name: string; tagline: string; playstyle: string; difficulty: string; color: string; symbol: string }[] = [
+const CLASSES: { id: WizardClass; name: string; tagline: string; playstyle: string; difficulty: string; color: string; symbol: string; comingSoon?: boolean }[] = [
   { id: 'fire',  name: 'Fire',  symbol: '🔥', tagline: 'Passionate. Aggressive. Loud.',       playstyle: 'High damage, escalating pressure. Some self-risk.', difficulty: 'Medium',    color: '#ff4500' },
   { id: 'ice',   name: 'Ice',   symbol: '❄️', tagline: 'Cunning. Precise. Final.',             playstyle: 'Control-heavy. Punishes aggression. Glass cannon burst.', difficulty: 'High',      color: '#a0d8ff' },
   { id: 'dark',  name: 'Dark',  symbol: '🌑', tagline: 'Chaotic. Self-loving. Unempathetic.',  playstyle: 'Asymmetric and theatrical. Highest ceiling.', difficulty: 'Very High', color: '#cc00ff' },
-  { id: 'sword', name: 'Sword', symbol: '⚔️', tagline: 'Sovereign. Disciplined. Certain.',    playstyle: 'Clean hits, parry-based. Razor margin.',              difficulty: 'High',      color: '#c8c8c8' },
-  { id: 'earth', name: 'Earth', symbol: '🌍', tagline: 'Ancient. Calm. Immovable.',           playstyle: 'Zone control, defense. Devastating payoff.',           difficulty: 'Medium',    color: '#8B6914' },
+  { id: 'sword', name: 'Sword', symbol: '⚔️', tagline: 'Sovereign. Disciplined. Certain.',    playstyle: 'Clean hits, parry-based. Razor margin.',              difficulty: 'High',      color: '#c8c8c8', comingSoon: true },
+  { id: 'earth', name: 'Earth', symbol: '🌍', tagline: 'Ancient. Calm. Immovable.',           playstyle: 'Zone control, defense. Devastating payoff.',           difficulty: 'Medium',    color: '#8B6914', comingSoon: true },
 ];
 
 export function ClassSelect({ ws, onSelected }: ClassSelectProps) {
@@ -79,15 +79,17 @@ export function ClassSelect({ ws, onSelected }: ClassSelectProps) {
             key={c.id}
             onMouseEnter={() => setHovered(c.id)}
             onMouseLeave={() => setHovered(null)}
-            onClick={() => select(c.id)}
-            locksPointer
+            onClick={() => !c.comingSoon && select(c.id)}
+            disabled={c.comingSoon}
+            locksPointer={!c.comingSoon}
             style={{
+              position: 'relative',
               width: 120,
               height: 160,
               background: hovered === c.id ? `${c.color}22` : 'rgba(255,255,255,0.03)',
               border: `1px solid ${hovered === c.id ? c.color : '#222'}`,
               borderRadius: 2,
-              cursor: 'pointer',
+              cursor: c.comingSoon ? 'not-allowed' : 'pointer',
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
@@ -97,6 +99,7 @@ export function ClassSelect({ ws, onSelected }: ClassSelectProps) {
               color: hovered === c.id ? c.color : '#999',
               boxShadow: hovered === c.id ? `0 0 20px ${c.color}22` : 'none',
               fontFamily: "'Courier New', monospace",
+              opacity: c.comingSoon ? 0.45 : 1,
             }}
           >
             <div style={{ fontSize: 28 }}>{c.symbol}</div>
@@ -104,6 +107,18 @@ export function ClassSelect({ ws, onSelected }: ClassSelectProps) {
             <div style={{ fontSize: 12, color: hovered === c.id ? `${c.color}cc` : '#777', letterSpacing: 1 }}>
               {c.difficulty}
             </div>
+            {c.comingSoon && (
+              <div style={{
+                position: 'absolute',
+                bottom: 8,
+                fontSize: 9,
+                letterSpacing: 1.5,
+                color: '#ffcc00',
+                textTransform: 'uppercase',
+              }}>
+                Coming Soon
+              </div>
+            )}
           </UIButton>
         ))}
       </div>
