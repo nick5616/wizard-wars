@@ -7,6 +7,7 @@ import { ExpBar } from './ExpBar';
 import { SpellBar } from './SpellBar';
 import { KillFeed } from './KillFeed';
 import { CombatLogHUD } from './CombatLog';
+import { DomainBanner } from './DomainBanner';
 import type { WebSocketClient } from '../../networking/WebSocketClient';
 
 export function HUD({ ws }: { ws: WebSocketClient }) {
@@ -23,6 +24,7 @@ export function HUD({ ws }: { ws: WebSocketClient }) {
       <SpellBar />
       <KillFeed />
       <CombatLogHUD ws={ws} />
+      <DomainBanner />
 
       {/* Kill count */}
       <div style={{

@@ -43,7 +43,11 @@ export function AoeSpell({ effect }: { effect: EffectState }) {
   if (!effect.position) return null;
 
   const spell = getSpell(effect.spellId);
-  const school = (spell?.school as School) ?? 'fire';
+  // Not every aoe effect is a real cast spell -- passive-triggered ones
+  // (domain stone spires, dash trails, frost trails, ...) use a synthetic
+  // spellId that getSpell() doesn't know, so they carry their own
+  // school/color directly on the effect instead (see SpellSystem.js).
+  const school = (spell?.school as School) ?? (effect.school as School) ?? 'fire';
   const spec = BURST_SPEC[school] ?? BURST_SPEC.fire;
   const color = spell?.color ?? effect.color ?? '#ffffff';
   const glow = spell?.glowColor ?? effect.glowColor ?? color;

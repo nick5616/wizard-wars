@@ -9,6 +9,7 @@ export class Player {
     this.username = username ?? `Wizard_${id.slice(0, 4)}`;
     this.isLocalConnection = false; // set by GameServer.onConnection; gates Experiment Lab features
     this.isGodMode = false; // Experiment Lab: invulnerable + untargetable
+    this.isDebugMode = false; // set once via C2S.DEBUG_GRANT -- skips every cooldown check (see SpellSystem)
 
     // State
     this.class = null;

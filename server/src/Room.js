@@ -9,7 +9,7 @@ import { S2C } from 'shared/events';
 import {
   TICK_RATE, TICK_INTERVAL, GRAVITY, BASE_MOVE_SPEED, PLAYER_HEIGHT,
   ARENA_RADIUS, JUMP_FORCE, PLAYER_MAX_HEALTH, RESPAWN_DELAY,
-  STARTING_SKILL_POINTS, POINTS_PER_KILL, POINTS_PER_ASSIST,
+  STARTING_SKILL_POINTS, POINTS_PER_LEVEL,
   STATE_HISTORY_TICKS, MAX_CONCURRENT_DOMAINS, PLAYER_CAPSULE_RADIUS,
 } from 'shared/constants';
 import { getSpell } from 'shared/spells';
@@ -91,6 +91,10 @@ export class Room {
 
   removePlayer(playerId) {
     this.playerIds.delete(playerId);
+    // Non-blocking skill-point prompts never expire on their own (see
+    // ProgressionSystem._openChoice) -- without this, a player who
+    // disconnects mid-prompt would leave a stray entry behind forever.
+    this.progressionSystem.pendingVotes.delete(playerId);
     this.server.broadcast(this.id, { type: S2C.PLAYER_LEFT, playerId });
   }
 
@@ -564,7 +568,6 @@ export class Room {
     const killer = this.server.players.get(killerId);
     if (killer) {
       killer.kills++;
-      killer.skillPoints += POINTS_PER_KILL;
       // Vampiric: Crimson Hunger — burst heal on kill
       if (killer.class === 'dark' && killer.unlockedNodes.has('crimson_hunger')) {
         killer.health = Math.min(killer.maxHealth, killer.health + 40);
@@ -578,6 +581,10 @@ export class Room {
       killer.xp += XP_PER_KILL;
       killer.level = levelFromXp(killer.xp);
       if (killer.level > prevLevel) {
+        // Skill points come from leveling up, not from the kill itself -- a
+        // kill that doesn't cross a level threshold grants none, so "level"
+        // stays the thing that actually gates progression.
+        killer.skillPoints += (killer.level - prevLevel) * POINTS_PER_LEVEL;
         this.server.send(killer, {
           type: S2C.LEVEL_UP,
           level: killer.level,
@@ -600,7 +607,9 @@ export class Room {
       playerId: player.id,
       killerId: killerId ?? null,
       killerName: killer?.username ?? null,
+      killerSymbol: killer ? classSymbol(killer.class, killer.divergedBranch) : null,
       victimName: player.username,
+      spellId: killingSpellId,
     });
 
     this.server.broadcast(this.id, {

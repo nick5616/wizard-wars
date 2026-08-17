@@ -125,8 +125,9 @@ export class WebSocketHandler {
     player.equippedSpells[slotIndex] = spellId;
   }
 
-  /** Debug mode: grant points and immediately walk the whole tree, auto-resolving any fork instantly instead of waiting on the normal 12s vote timeout, so toggling it on unlocks (and equips) everything right away. */
+  /** Debug mode: grant points and immediately walk the whole tree, auto-resolving any fork instantly instead of waiting on the normal 12s vote timeout, so toggling it on unlocks (and equips) everything right away. Also flags the player so every cast/mobility/basic-attack/melee cooldown check is skipped (see SpellSystem). */
   _handleDebugGrant(player) {
+    player.isDebugMode = true;
     player.skillPoints += 999;
     if (!player.class) return;
     const room = player.roomId ? this.server.rooms.get(player.roomId) : null;
@@ -252,10 +253,10 @@ export class WebSocketHandler {
   }
 
   _handleVoteResolve(player, msg) {
-    const { branchGroup, choice } = msg;
-    if (!player.roomId || !branchGroup || !choice) return;
+    const { promptId, choice } = msg;
+    if (!player.roomId || !promptId || !choice) return;
     const room = this.server.rooms.get(player.roomId);
-    if (room) room.progressionSystem.resolveVote(player, branchGroup, choice);
+    if (room) room.progressionSystem.resolveVote(player, promptId, choice);
   }
 }
 

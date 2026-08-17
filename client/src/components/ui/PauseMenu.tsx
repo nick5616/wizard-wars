@@ -449,12 +449,21 @@ function GlossaryTab({ unlockedList, classColor }: {
       <div style={{ color: '#aaa', fontSize: 10, letterSpacing: 3, textTransform: 'uppercase', marginBottom: 14 }}>
         Unlocked — {unlockedList.length} node{unlockedList.length !== 1 ? 's' : ''}
       </div>
-      {unlockedList.map(({ id, label, description }) => (
-        <div key={id} style={{ padding: '10px 0', borderBottom: '1px solid #1c1c2c' }}>
-          <div style={{ color: classColor, fontSize: 12, marginBottom: 3 }}>{label}</div>
-          <div style={{ color: '#bbb', fontSize: 11, lineHeight: 1.5 }}>{description}</div>
-        </div>
-      ))}
+      {unlockedList.map(({ id, label, description }) => {
+        const kind = iconKindForSpellId(id);
+        return (
+          <div key={id} style={{ padding: '10px 0', borderBottom: '1px solid #1c1c2c' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+              <div style={{ color: classColor, fontSize: 12 }}>{label}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 3, color: '#777' }}>
+                <SpellTypeIcon kind={kind} size={10} color="#777" />
+                <span style={{ fontSize: 9, letterSpacing: 1, textTransform: 'uppercase' }}>{kind}</span>
+              </div>
+            </div>
+            <div style={{ color: '#bbb', fontSize: 11, lineHeight: 1.5 }}>{description}</div>
+          </div>
+        );
+      })}
     </div>
   );
 }

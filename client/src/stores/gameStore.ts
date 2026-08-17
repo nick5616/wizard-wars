@@ -31,10 +31,13 @@ export interface VoteOption {
 }
 
 export interface VoteState {
-  branchGroup: string;
+  promptId: string;
+  branchGroup: string | null;
   options: VoteOption[];
-  expiresAt: number;
-  totalMs: number;
+  // true: the once-per-life fork -- fullscreen, despawned, no timeout shown.
+  // false: an ordinary "you have a point to spend and more than one place it
+  // could go" choice -- light corner prompt, never blocks or times out.
+  blocking: boolean;
 }
 
 export const NOTIFICATION_TTL_MS = 4000;
@@ -75,6 +78,7 @@ interface GameState {
   killFeed: KillFeedEntry[];
   notifications: NotificationEntry[];
   voteState: VoteState | null;
+  lastDeath: { killerName: string | null; killerSymbol: string | null; spellId: string | null } | null;
 
   // Set by GAME_TICK reconciliation, consumed and cleared by CameraController
   serverCorrectedPos: Vec3 | null;
@@ -93,6 +97,7 @@ interface GameState {
   pushNotification: (text: string, color?: string) => void;
   pruneNotifications: () => void;
   setVoteState: (v: VoteState | null) => void;
+  setLastDeath: (v: GameState['lastDeath']) => void;
   setLocalPosition: (pos: Vec3) => void;
   setLocalAlive: (v: boolean) => void;
   addUnlockedNode: (nodeId: string) => void;
@@ -149,6 +154,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   killFeed: [],
   notifications: [],
   voteState: null,
+  lastDeath: null,
   serverCorrectedPos: null,
   damageNumbers: [],
   menuOpen: false,
@@ -225,6 +231,8 @@ export const useGameStore = create<GameState>((set, get) => ({
   }),
 
   setVoteState: (v) => set({ voteState: v }),
+
+  setLastDeath: (v) => set({ lastDeath: v }),
 
   setLocalPosition: (pos) => set((s) => ({ local: { ...s.local, position: pos } })),
 

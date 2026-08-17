@@ -8,6 +8,7 @@ import { hatScaleForLevel } from 'shared/leveling';
 import { registerTarget, unregisterTarget } from '../../networking/targetRegistry';
 import { ArmAndWand } from './ArmAndWand';
 import { useCastAnimation } from '../../hooks/useCastAnimation';
+import { getSpell } from 'shared/spells';
 
 // Must mirror the private HAT_CONE_* / HAT_BASE_LOCAL_Y constants in
 // shared/leveling.js so the rendered hat lines up with where the server
@@ -49,6 +50,11 @@ export function RemotePlayer({ playerId, interpolation, serverNow, initialState 
   const color = initialState.isBot ? darken(baseColor, 0.55) : baseColor;
   const hatScale = hatScaleForLevel(initialState.level ?? 1);
   const castAnimRef = useCastAnimation(playerId);
+
+  // Wand-tip gem tracks whatever spell is currently selected -- initialState
+  // is a fresh prop each network tick (see Scene.tsx), so this stays live.
+  const activeSpellId = initialState.equippedSpells?.[initialState.activeSlot ?? 0] ?? null;
+  const gemColor = (activeSpellId ? getSpell(activeSpellId)?.color : null) ?? color;
 
   useEffect(() => {
     if (groupRef.current) registerTarget(playerId, groupRef.current);
@@ -102,8 +108,8 @@ export function RemotePlayer({ playerId, interpolation, serverNow, initialState 
       {/* Class glow */}
       <pointLight position={[0, 1.5, 0]} intensity={0.5} distance={3} color={color} />
 
-      {/* Arm + wand — pose reacts to whatever spell type was just cast */}
-      <ArmAndWand color={color} castAnimRef={castAnimRef} />
+      {/* Arm + wand — pose reacts to whatever spell type was just cast, gem tints to the selected spell */}
+      <ArmAndWand color={color} gemColor={gemColor} castAnimRef={castAnimRef} />
 
       {/* Bot marker: a small dark ring at the feet — desaturated color alone reads as "off" at a distance, this makes it explicit */}
       {initialState.isBot && (

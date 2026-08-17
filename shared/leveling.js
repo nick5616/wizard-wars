@@ -6,7 +6,7 @@
 
 import { PLAYER_HEIGHT } from './constants.js';
 
-export const XP_PER_KILL = 30;
+export const XP_PER_KILL = 50;
 
 export function xpForNextLevel(level) {
   return 60 + level * 40;

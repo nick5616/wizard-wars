@@ -16,6 +16,7 @@ import { PLAYER_HEIGHT } from 'shared/constants';
 import { hatScaleForLevel } from 'shared/leveling';
 import { ArmAndWand } from './ArmAndWand';
 import { useCastAnimation } from '../../hooks/useCastAnimation';
+import { getSpell } from 'shared/spells';
 
 const HAT_CONE_RADIUS = 0.28;
 const HAT_CONE_HEIGHT = 0.5;
@@ -43,6 +44,13 @@ export function LocalPlayerModel() {
   const color = CLASS_COLORS[local.class ?? 'default'] ?? CLASS_COLORS.default;
   const hatScale = hatScaleForLevel(local.level ?? 1);
 
+  // Unlike the rest of this component, the wand gem needs to be reactive --
+  // it only changes on the rare occasions the active slot/loadout changes,
+  // so a normal store subscription here doesn't fight the "driven
+  // imperatively for position" design (position/rotation still bypass React).
+  const activeSpellId = useGameStore((s) => s.local.equippedSpells[s.local.activeSlot] ?? null);
+  const gemColor = (activeSpellId ? getSpell(activeSpellId)?.color : null) ?? color;
+
   return (
     <group ref={groupRef}>
       <mesh position={[0, 0.9, 0]} castShadow>
@@ -64,7 +72,7 @@ export function LocalPlayerModel() {
 
       <pointLight position={[0, 1.5, 0]} intensity={0.5} distance={3} color={color} />
 
-      <ArmAndWand color={color} castAnimRef={castAnimRef} />
+      <ArmAndWand color={color} gemColor={gemColor} castAnimRef={castAnimRef} />
     </group>
   );
 }

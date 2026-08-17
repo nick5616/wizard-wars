@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import type { CSSProperties } from 'react';
 import { useGameStore } from '../../stores/gameStore';
+import type { VoteState } from '../../stores/gameStore';
 import { C2S } from 'shared/events';
 import { getSpell } from 'shared/spells';
 import { getNode } from 'shared/skillTrees';
@@ -8,6 +9,7 @@ import { classFlavor } from 'shared/classFlavor';
 import type { WebSocketClient } from '../../networking/WebSocketClient';
 import { UIButton } from './UIButton';
 import { audioManager } from '../../audio/AudioManager';
+import { legibleAccent } from '../../utils/legibleColor';
 
 interface SkillVotePromptProps {
   ws: WebSocketClient;
@@ -17,48 +19,36 @@ const CLASS_COLORS: Record<string, string> = {
   fire: '#ff4500', ice: '#a0d8ff', dark: '#cc00ff', sword: '#c8c8c8', earth: '#8B6914',
 };
 
-// A permanent, once-per-life fork in the caster's skill tree (see
-// shared/skillTrees.js's branchGroup/branch fields) is a big enough moment
-// to earn a full takeover: the player is despawned server-side for its
-// duration (Room.processInput's isChoosingBranch check / Room.applyDamage's
-// invulnerability check), so the screen matches that with a real "the world
-// stopped for this" presentation instead of a small corner prompt easy to
-// miss mid-fight.
+const F_KEYS = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9'];
+
 export function SkillVotePrompt({ ws }: SkillVotePromptProps) {
   const voteState = useGameStore((s) => s.voteState);
   const setVoteState = useGameStore((s) => s.setVoteState);
-  const wizardClass = useGameStore((s) => s.local.class);
-  const [, forceTick] = useState(0);
-
-  useEffect(() => {
-    if (!voteState) return;
-    // vote_open is already played by App.tsx's SKILL_VOTE_PROMPT handler.
-    if (document.pointerLockElement) document.exitPointerLock();
-    const interval = setInterval(() => forceTick((n) => n + 1), 100);
-    return () => clearInterval(interval);
-  }, [voteState]);
 
   function choose(id: string) {
     if (!voteState) return;
-    ws.send(C2S.SKILL_VOTE_RESOLVE, { branchGroup: voteState.branchGroup, choice: id });
+    ws.send(C2S.SKILL_VOTE_RESOLVE, { promptId: voteState.promptId, choice: id });
     audioManager.playSound('vote_select');
     setVoteState(null);
-    setTimeout(() => {
-      const canvas = document.querySelector('canvas');
-      if (canvas && !document.pointerLockElement) canvas.requestPointerLock();
-    }, 50);
+    if (voteState.blocking) {
+      setTimeout(() => {
+        const canvas = document.querySelector('canvas');
+        if (canvas && !document.pointerLockElement) canvas.requestPointerLock();
+      }, 50);
+    }
   }
 
   useEffect(() => {
     if (!voteState) return;
 
     function onKeyDown(e: KeyboardEvent) {
-      if (e.code !== 'F1' && e.code !== 'F2') return;
-      e.preventDefault();
-      const idx = e.code === 'F1' ? 0 : 1;
+      const idx = F_KEYS.indexOf(e.code);
+      if (idx === -1) return;
       const current = useGameStore.getState().voteState;
       const choice = current?.options[idx]?.id;
-      if (choice) choose(choice);
+      if (!choice) return;
+      e.preventDefault();
+      choose(choice);
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
@@ -66,17 +56,56 @@ export function SkillVotePrompt({ ws }: SkillVotePromptProps) {
   }, [voteState, ws]);
 
   if (!voteState) return null;
+  return voteState.blocking
+    ? <ForkChoiceScreen voteState={voteState} onChoose={choose} />
+    : <PointSpendPrompt voteState={voteState} onChoose={choose} />;
+}
 
-  const remaining = Math.max(0, voteState.expiresAt - Date.now());
-  const pct = voteState.totalMs > 0 ? Math.max(0, Math.min(1, remaining / voteState.totalMs)) : 0;
-  const baseColor = (wizardClass && CLASS_COLORS[wizardClass]) ?? '#ffcc00';
+interface Panel {
+  id: string;
+  i: number;
+  flavor: { symbol: string; title: string };
+  color: string;
+  label: string;
+  description: string;
+}
 
-  const panels = voteState.options.map((opt, i) => {
+function buildPanels(voteState: { options: { id: string; label: string; description: string }[] }, baseColor: string): Panel[] {
+  const wizardClass = useGameStore.getState().local.class;
+  return voteState.options.map((opt, i) => {
     const node = wizardClass ? getNode(wizardClass, opt.id) : null;
-    const flavor = wizardClass ? classFlavor(wizardClass, node?.branchGroup ? { [node.branchGroup]: node.branch } : {}) : { symbol: '', title: opt.label };
-    const color = getSpell(opt.id)?.color ?? baseColor;
-    return { opt, i, flavor, color };
+    const flavor = wizardClass
+      ? classFlavor(wizardClass, node?.branchGroup ? { [node.branchGroup]: node.branch } : {})
+      : { symbol: '', title: opt.label };
+    const spell = getSpell(opt.id);
+    // Text/accent color, not the raw spell color -- some spells (Amaterasu's
+    // "black fire") are deliberately near-black for their 3D effect, which
+    // would be invisible as text on this UI's dark panels.
+    const color = spell ? legibleAccent(spell.color, spell.glowColor) : baseColor;
+    return { id: opt.id, i, flavor, color, label: opt.label, description: opt.description };
   });
+}
+
+// A permanent, once-per-life fork in the caster's skill tree (see
+// shared/skillTrees.js's branchGroup/branch fields) is a big enough moment
+// to earn a full takeover: the player is despawned server-side for its
+// duration (Room.processInput's isChoosingBranch check / Room.applyDamage's
+// invulnerability check), so the screen matches that with a real "the world
+// stopped for this" presentation instead of a small corner prompt easy to
+// miss mid-fight. No countdown here on purpose -- this is a permanent,
+// once-per-life decision, and reading it under a ticking clock is the wrong
+// feeling for it. (The server still has a long safety-net timeout in case
+// someone walks away, but nothing about it is shown here.)
+function ForkChoiceScreen({ voteState, onChoose }: { voteState: VoteState; onChoose: (id: string) => void }) {
+  const wizardClass = useGameStore((s) => s.local.class);
+
+  useEffect(() => {
+    // vote_open is already played by App.tsx's SKILL_VOTE_PROMPT handler.
+    if (document.pointerLockElement) document.exitPointerLock();
+  }, []);
+
+  const baseColor = (wizardClass && CLASS_COLORS[wizardClass]) ?? '#ffcc00';
+  const panels = buildPanels(voteState, baseColor);
 
   return (
     <div
@@ -102,22 +131,15 @@ export function SkillVotePrompt({ ws }: SkillVotePromptProps) {
         @keyframes wwv-shimmer { 0% { background-position: 0% 0; } 100% { background-position: 200% 0; } }
       `}</style>
 
-      <div style={{ textAlign: 'center', marginBottom: 34, animation: 'wwv-rise 380ms ease-out' }}>
-        <div
-          style={{
-            fontSize: 13,
-            letterSpacing: 10,
-            textTransform: 'uppercase',
-            color: '#888',
-            marginBottom: 10,
-          }}
-        >
+      <div style={{ textAlign: 'center', marginBottom: 40, animation: 'wwv-rise 380ms ease-out' }}>
+        <div style={{ fontSize: 12, letterSpacing: 9, textTransform: 'uppercase', color: '#888', marginBottom: 12 }}>
           A path diverges
         </div>
         <div
           style={{
-            fontSize: 30,
-            letterSpacing: 4,
+            fontSize: 42,
+            fontWeight: 'bold',
+            letterSpacing: 5,
             textTransform: 'uppercase',
             backgroundImage: `linear-gradient(90deg, ${panels[0]?.color ?? baseColor}, #fff, ${panels[1]?.color ?? baseColor}, #fff, ${panels[0]?.color ?? baseColor})`,
             backgroundSize: '200% auto',
@@ -129,25 +151,26 @@ export function SkillVotePrompt({ ws }: SkillVotePromptProps) {
         >
           Choose Your Path
         </div>
-        <div style={{ fontSize: 12, color: '#cc6666', letterSpacing: 2, marginTop: 12 }}>
-          This choice is permanent. There is no going back.
+        <div style={{ fontSize: 12, color: '#cc6666', letterSpacing: 2, marginTop: 14 }}>
+          This choice is permanent. There is no going back. Take your time.
         </div>
       </div>
 
       <div style={{ display: 'flex', gap: 28, alignItems: 'stretch' }}>
-        {panels.map(({ opt, i, flavor, color }) => (
+        {panels.map(({ id, i, flavor, color, label, description }) => (
           <UIButton
-            key={opt.id}
-            onClick={() => choose(opt.id)}
+            key={id}
+            onClick={() => onChoose(id)}
             style={
               {
-                width: 300,
-                padding: '28px 22px',
+                position: 'relative',
+                width: 320,
+                padding: '30px 24px 26px',
                 background: `linear-gradient(180deg, ${color}18, rgba(6,6,16,0.9))`,
                 border: `1px solid ${color}88`,
                 borderRadius: 8,
                 cursor: 'pointer',
-                textAlign: 'center',
+                textAlign: 'left',
                 color: '#ddd',
                 fontFamily: "'Courier New', monospace",
                 animation: `wwv-rise 420ms ease-out ${i * 90}ms both, wwv-pulse-border 2.6s ease-in-out infinite`,
@@ -155,22 +178,105 @@ export function SkillVotePrompt({ ws }: SkillVotePromptProps) {
               } as CSSProperties
             }
           >
-            <div style={{ fontSize: 34, marginBottom: 10 }}>{flavor.symbol}</div>
-            <div style={{ fontSize: 10, letterSpacing: 3, textTransform: 'uppercase', color: `${color}cc`, marginBottom: 4 }}>
-              [F{i + 1}] {flavor.title}
+            <div style={{
+              position: 'absolute', top: 10, left: 12,
+              fontSize: 10, letterSpacing: 1, color: `${color}aa`,
+              border: `1px solid ${color}55`, borderRadius: 3, padding: '2px 6px',
+            }}>
+              F{i + 1}
             </div>
-            <div style={{ fontSize: 17, color: '#fff', marginBottom: 12, letterSpacing: 1 }}>{opt.label}</div>
-            <div style={{ fontSize: 12, color: '#aaa', lineHeight: 1.6 }}>{opt.description}</div>
+
+            <div style={{ fontSize: 38, marginBottom: 12 }}>{flavor.symbol}</div>
+
+            {/* High-level title: the identity this choice commits you to -- the largest, most important text in the panel. */}
+            <div style={{ fontSize: 25, color: '#fff', letterSpacing: 1, marginBottom: 8, lineHeight: 1.2 }}>
+              {flavor.title}
+            </div>
+
+            {/* Supporting detail: the specific spell this unlocks first. */}
+            <div style={{
+              display: 'inline-block',
+              fontSize: 11, letterSpacing: 2, textTransform: 'uppercase',
+              color: `${color}cc`, marginBottom: 14,
+              border: `1px solid ${color}44`, borderRadius: 3, padding: '3px 9px',
+            }}>
+              {label}
+            </div>
+
+            <div style={{ fontSize: 12, color: '#aaa', lineHeight: 1.6 }}>{description}</div>
           </UIButton>
         ))}
       </div>
+    </div>
+  );
+}
 
-      <div style={{ width: 628, height: 4, background: '#1a1a24', borderRadius: 2, overflow: 'hidden', marginTop: 34 }}>
-        <div style={{ height: '100%', width: `${pct * 100}%`, background: `linear-gradient(90deg, ${panels[0]?.color ?? baseColor}, ${panels[1]?.color ?? baseColor})`, transition: 'width 100ms linear' }} />
+// An ordinary skill point with more than one legal place to spend it (e.g.
+// several spells becoming available at the same tier at once) -- unlike the
+// fork above, none of these choices foreclose the others: pick one now, the
+// rest stay available for your next point. Deliberately NOT a takeover: no
+// despawn, no freeze, no timeout. If you ignore it, the point just stays
+// banked -- it never spends itself for you, and it never demands attention.
+function PointSpendPrompt({ voteState, onChoose }: { voteState: VoteState; onChoose: (id: string) => void }) {
+  const wizardClass = useGameStore((s) => s.local.class);
+  const skillPoints = useGameStore((s) => s.local.skillPoints);
+  const baseColor = (wizardClass && CLASS_COLORS[wizardClass]) ?? '#ffcc00';
+  const panels = buildPanels(voteState, baseColor);
+  // Every node currently costs exactly 1 point to unlock (see
+  // ProgressionSystem._unlockNode) -- shown per-option so the cost is
+  // explicit rather than assumed, in case that ever stops being uniform.
+  const pointCost = 1;
+
+  return (
+    <div style={{
+      position: 'fixed',
+      left: 20,
+      bottom: 20,
+      width: 300,
+      zIndex: 160,
+      fontFamily: "'Courier New', monospace",
+      background: 'rgba(6,6,16,0.94)',
+      border: `1px solid ${baseColor}55`,
+      borderRadius: 6,
+      padding: 14,
+      boxShadow: `0 0 16px ${baseColor}22`,
+    }}>
+      <div style={{ fontSize: 10, letterSpacing: 2, textTransform: 'uppercase', color: baseColor, marginBottom: 10 }}>
+        You have {skillPoints} skill point{skillPoints === 1 ? '' : 's'} to spend
       </div>
-      <div style={{ fontSize: 10, color: '#666', letterSpacing: 2, marginTop: 10, textTransform: 'uppercase' }}>
-        Deciding automatically in {Math.ceil(remaining / 1000)}s
-      </div>
+
+      {panels.map(({ id, i, color, label, description }) => (
+        <UIButton
+          key={id}
+          onClick={() => onChoose(id)}
+          style={{
+            position: 'relative',
+            display: 'block',
+            width: '100%',
+            padding: '7px 9px',
+            marginBottom: 6,
+            background: `${color}0f`,
+            border: `1px solid ${color}55`,
+            borderRadius: 4,
+            cursor: 'pointer',
+            textAlign: 'left',
+            fontFamily: "'Courier New', monospace",
+          }}
+        >
+          <span style={{
+            position: 'absolute', top: 6, right: 8,
+            fontSize: 9, color: `${color}cc`,
+            border: `1px solid ${color}55`, borderRadius: 3, padding: '1px 4px',
+          }}>
+            {pointCost} pt
+          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2, paddingRight: 34 }}>
+            <span style={{ fontSize: 9, color: `${color}cc`, border: `1px solid ${color}55`, borderRadius: 3, padding: '1px 4px' }}>F{i + 1}</span>
+            <span style={{ fontSize: 12, color: '#eee' }}>{label}</span>
+          </div>
+          <div style={{ fontSize: 10, color: '#999', lineHeight: 1.4 }}>{description}</div>
+        </UIButton>
+      ))}
     </div>
   );
 }

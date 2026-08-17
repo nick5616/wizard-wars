@@ -69,7 +69,17 @@ function computePose(cast: CastAnim | null, now: number): [number, number, numbe
   }
 }
 
-export function ArmAndWand({ color, castAnimRef }: { color: string; castAnimRef: React.RefObject<CastAnim | null> }) {
+interface ArmAndWandProps {
+  color: string;
+  castAnimRef: React.RefObject<CastAnim | null>;
+  /** Wand-tip gem color — the currently-selected spell's color (yellow for
+   * Lightning Strike, black-red for Amaterasu, ...) so onlookers can read
+   * what a caster has readied. Falls back to the class color when no spell
+   * is selected/unequipped. */
+  gemColor?: string;
+}
+
+export function ArmAndWand({ color, castAnimRef, gemColor }: ArmAndWandProps) {
   const rigRef = useRef<THREE.Group>(null);
   const gemRef = useRef<THREE.Mesh>(null);
 
@@ -105,10 +115,10 @@ export function ArmAndWand({ color, castAnimRef }: { color: string; castAnimRef:
           <cylinderGeometry args={[0.02, 0.035, 0.55, 6]} />
           <meshStandardMaterial color="#2a1a10" roughness={0.5} />
         </mesh>
-        {/* tip gem — brightens while casting */}
+        {/* tip gem — brightens while casting, tinted by the currently-selected spell */}
         <mesh ref={gemRef} position={[0, 0, -0.86]}>
           <sphereGeometry args={[0.055, 8, 8]} />
-          <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.5} />
+          <meshStandardMaterial color={gemColor ?? color} emissive={gemColor ?? color} emissiveIntensity={0.5} />
         </mesh>
       </group>
     </group>

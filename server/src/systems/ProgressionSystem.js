@@ -1,58 +1,73 @@
+import { v4 as uuid } from 'uuid';
 import { S2C } from 'shared/events';
 import { hatBuffTierForLevel, HAT_BUFF_DAMAGE_MULT, HAT_BUFF_DURATION_MS } from 'shared/leveling';
 import { SKILL_TREES, getNode, canUnlockNode, getForkPair } from 'shared/skillTrees';
 import { DEFAULT_EQUIPPED } from 'shared/spells';
 
-const VOTE_TIMEOUT_MS = 12000;
+// The one designated fork per class (branchGroup) is a permanent,
+// once-per-life commitment -- that gets the full dramatic despawn treatment
+// (see _openChoice) and, for a human, no timeout at all: the client shows no
+// countdown (SkillVotePrompt.tsx) so they can actually read it. This is only
+// a safety net for someone who walks away mid-vote.
+const HUMAN_FORK_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
- * Skill-tree auto-unlock, the F1/F2 divergence vote, and the wizard-hat
- * contact buff. Kept separate from SpellSystem/Room since it's about
- * progression state, not combat resolution.
+ * Skill-tree auto-unlock and the F1..Fn point-spend prompt, plus the
+ * wizard-hat contact buff. Kept separate from SpellSystem/Room since it's
+ * about progression state, not combat resolution.
  */
 export class ProgressionSystem {
   constructor(room) {
     this.room = room;
-    this.pendingVotes = new Map(); // playerId -> { branchGroup, options: [nodeIdA, nodeIdB], expiresAt }
+    this.pendingVotes = new Map(); // playerId -> { id, branchGroup, options: [nodeId...], expiresAt, blocking }
   }
 
   // ── Auto-unlock ───────────────────────────────────────────────────────────
-  // Skill points spend themselves the instant they're available -- no more
-  // manual "buy" clicking. Call this whenever skillPoints increases (on kill,
-  // on class select, after a vote resolves). Walks the class tree in tier
-  // order, unlocking anything whose prereqs are satisfied, until it either
-  // runs out of points, runs out of unlockable nodes, or hits the one
-  // designated fork for the class -- at which point it opens a vote and
-  // pauses until the player (or the timeout) resolves it.
+  // Skill points spend themselves the instant they're available -- no manual
+  // "buy" clicking -- EXCEPT when there's more than one legal node to spend
+  // the point on. A single unambiguous next step (the overwhelmingly common
+  // case) unlocks immediately and silently. A genuine choice pauses and asks:
+  //   - an undecided fork pair (mutually exclusive, permanent) gets the full
+  //     fullscreen despawn treatment (_openChoice(..., blocking: true))
+  //   - anything else (e.g. several ordinary spells becoming available at
+  //     the same tier at once) gets a light, non-blocking prompt that just
+  //     sits there until answered -- it never interrupts play, and a player
+  //     who ignores it simply keeps their point banked instead of it being
+  //     silently spent for them.
+  // Bots never see either prompt -- they can't answer one, so they always
+  // auto-pick the first candidate (and, for a fork, that IS their permanent
+  // branch commitment) and keep walking.
   tryAutoUnlock(player) {
     if (!player.class || this.pendingVotes.has(player.id)) return;
 
     const sorted = [...(SKILL_TREES[player.class] ?? [])].sort((a, b) => a.tier - b.tier);
 
-    let changed = true;
-    while (changed && player.skillPoints > 0) {
-      changed = false;
+    while (player.skillPoints > 0) {
+      const candidates = sorted.filter((node) => {
+        if (!canUnlockNode(node, player.unlockedNodes)) return false;
+        const decided = node.branchGroup && player.divergedBranch[node.branchGroup];
+        return !decided || node.branch === decided;
+      });
 
-      for (const node of sorted) {
-        if (!canUnlockNode(node, player.unlockedNodes)) continue;
+      if (candidates.length === 0) return; // nothing left to spend on right now
 
-        if (node.branchGroup) {
-          const decided = player.divergedBranch[node.branchGroup];
-          if (decided) {
-            if (node.branch !== decided) continue; // this class committed to the other branch
-          } else {
-            const pair = getForkPair(player.class, node.branchGroup);
-            if (pair && pair.every((n) => !player.unlockedNodes.has(n.id))) {
-              this._openVote(player, node.branchGroup, pair);
-              return; // pause everything until the vote resolves
-            }
-          }
+      if (candidates.length === 1 || player.isBot) {
+        const pick = candidates[0];
+        if (pick.branchGroup && !player.divergedBranch[pick.branchGroup]) {
+          player.divergedBranch[pick.branchGroup] = pick.branch;
         }
-
-        this._unlockNode(player, node);
-        changed = true;
-        if (player.skillPoints <= 0) break;
+        this._unlockNode(player, pick);
+        continue; // re-evaluate candidates for the next point, if any
       }
+
+      const forkNode = candidates.find((n) => n.branchGroup && !player.divergedBranch[n.branchGroup]);
+      if (forkNode) {
+        const pair = getForkPair(player.class, forkNode.branchGroup);
+        this._openChoice(player, forkNode.branchGroup, pair, true);
+      } else {
+        this._openChoice(player, null, candidates, false);
+      }
+      return; // pause until the player answers
     }
   }
 
@@ -82,46 +97,54 @@ export class ProgressionSystem {
     }
   }
 
-  _openVote(player, branchGroup, pair) {
-    const expiresAt = Date.now() + VOTE_TIMEOUT_MS;
-    this.pendingVotes.set(player.id, { branchGroup, options: pair.map((n) => n.id), expiresAt });
-    // Pull the player out of the fight entirely while they decide -- hidden
-    // (RemotePlayer.tsx), invulnerable (Room.applyDamage), and input-frozen
-    // (Room.processInput) until the vote resolves. This is a genuine
-    // once-per-life commitment (see canUnlockNode/tryAutoUnlock's branch
-    // exclusivity), so it gets a moment of real weight instead of a
-    // corner-of-screen prompt you could miss mid-fight.
-    player.isChoosingBranch = true;
+  /**
+   * candidates.length is always >= 2 here (see tryAutoUnlock). blocking=true
+   * is exclusively the once-per-life fork: pulls the player out of the fight
+   * entirely while they decide -- hidden (RemotePlayer.tsx), invulnerable
+   * (Room.applyDamage), and input-frozen (Room.processInput) -- and never
+   * expires for a human (HUMAN_FORK_TIMEOUT_MS is just a walk-away safety
+   * net). blocking=false is an ordinary "you have a point to spend, and more
+   * than one place it could go" prompt: no despawn, no timeout at all, keeps
+   * playing normally, and updates in place if more points arrive before it's
+   * answered.
+   */
+  _openChoice(player, branchGroup, candidates, blocking) {
+    const id = uuid();
+    const expiresAt = blocking ? Date.now() + HUMAN_FORK_TIMEOUT_MS : Infinity;
+    this.pendingVotes.set(player.id, { id, branchGroup, options: candidates.map((n) => n.id), expiresAt, blocking });
+    if (blocking) player.isChoosingBranch = true;
+
     this.room.server.send(player, {
       type: S2C.SKILL_VOTE_PROMPT,
+      promptId: id,
       branchGroup,
-      options: pair.map((n) => ({ id: n.id, label: n.label, description: n.description })),
-      timeoutMs: VOTE_TIMEOUT_MS,
+      blocking,
+      options: candidates.map((n) => ({ id: n.id, label: n.label, description: n.description })),
     });
   }
 
-  resolveVote(player, branchGroup, choice) {
+  resolveVote(player, promptId, choice) {
     const pending = this.pendingVotes.get(player.id);
-    if (!pending || pending.branchGroup !== branchGroup) return;
+    if (!pending || pending.id !== promptId) return;
     this.pendingVotes.delete(player.id);
-    player.isChoosingBranch = false;
+    if (pending.blocking) player.isChoosingBranch = false;
 
     const nodeId = pending.options.includes(choice) ? choice : pending.options[0];
     const node = getNode(player.class, nodeId);
     if (!node) return;
 
-    player.divergedBranch[node.branchGroup] = node.branch;
+    if (node.branchGroup) player.divergedBranch[node.branchGroup] = node.branch;
     this._unlockNode(player, node);
-    this.tryAutoUnlock(player); // resume walking down the chosen branch
+    this.tryAutoUnlock(player); // resume -- may immediately open another prompt if more points/candidates remain
   }
 
-  /** Called every server tick from Room.update() -- auto-resolves votes nobody answered in time. */
+  /** Called every server tick from Room.update() -- auto-resolves a fork nobody answered in time (a walk-away safety net; ordinary point-spend prompts never expire). */
   tickVotes(now) {
     for (const [playerId, pending] of this.pendingVotes) {
       if (now < pending.expiresAt) continue;
       const player = this.room.server.players.get(playerId);
       this.pendingVotes.delete(playerId);
-      if (player) this.resolveVote(player, pending.branchGroup, pending.options[0]);
+      if (player) this.resolveVote(player, pending.id, pending.options[0]);
     }
   }
 

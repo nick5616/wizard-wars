@@ -32,10 +32,11 @@ export const CAST_MAX_RANGE = 80; // units
 // Domain expansions
 export const MAX_CONCURRENT_DOMAINS = 1;
 
-// Skill tree
-export const STARTING_SKILL_POINTS = 3;
-export const POINTS_PER_KILL = 2;
-export const POINTS_PER_ASSIST = 1;
+// Skill tree — points come from leveling up, not from kills directly (a kill
+// that doesn't cross a level threshold grants none), so "level" stays a
+// meaningful milestone instead of skill points racing ahead of it.
+export const STARTING_SKILL_POINTS = 1; // just enough for your class's first spell
+export const POINTS_PER_LEVEL = 1;
 
 // Death Note
 export const DEATH_NOTE_DAMAGE_WINDOW = 10000; // 10s — must have hit target recently

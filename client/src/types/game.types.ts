@@ -90,6 +90,7 @@ export interface EffectState {
   direction?: Vec3;
   color?: string;
   glowColor?: string;
+  school?: string;
   // AoE specifics
   startedAt?: number;
   activatesAt?: number;

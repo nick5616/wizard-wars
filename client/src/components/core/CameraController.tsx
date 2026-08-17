@@ -21,6 +21,7 @@ import { MOBILITY_SPELL, BASIC_ATTACK, MELEE_ATTACK, getSpell } from 'shared/spe
 import { getTargetObjects } from '../../networking/targetRegistry';
 import { audioManager } from '../../audio/AudioManager';
 import { localOrientation } from '../../networking/localOrientation';
+import { terrainRaycastBlocked } from 'shared/mapLayout';
 
 const MOUSE_SENSITIVITY = 0.002;
 
@@ -169,12 +170,21 @@ export function CameraController({ ws, prediction }: Props) {
     velRef.current = result.vel;
 
     if (useGameStore.getState().thirdPerson) {
-      // Chase cam: same look direction as first-person, just pulled back
-      // behind the player's head so their own model (see LocalPlayerModel)
-      // is visible.
+      // Valheim-style chase cam: pulled well back and up above the character
+      // instead of hovering right behind their head -- the old 4.2/0.5
+      // numbers put the camera close enough that your own body filled the
+      // screen and the crosshair sat directly on top of you. Orientation
+      // still exactly matches the mouse-look quaternion (no lookAt), so
+      // aiming stays crosshair-accurate -- only the vantage point moves.
       const fwd = new THREE.Vector3();
       camera.getWorldDirection(fwd);
-      const dist = 4.2, heightUp = 0.5;
+      const desiredDist = 7.5, heightUp = 2.4;
+
+      // Don't let the pulled-back camera clip through a wall behind the player.
+      const behind = { x: -fwd.x, y: -fwd.y, z: -fwd.z };
+      const blockDist = terrainRaycastBlocked(result.pos, behind, desiredDist);
+      const dist = blockDist !== null ? Math.max(1.5, blockDist - 0.5) : desiredDist;
+
       camera.position.set(
         result.pos.x - fwd.x * dist,
         result.pos.y + heightUp - fwd.y * dist,
@@ -225,16 +235,21 @@ export function CameraController({ ws, prediction }: Props) {
       lastCastRef.current = lmbDown;
 
       // Basic attack on RMB press (edge trigger) -- always available, no equip needed
+      const debugMode = useGameStore.getState().debugMode;
       const rmbDown = rmbRef.current;
       let basicAttack: { aimDir: Vec3 } | null = null;
       if (rmbDown && !lastBasicAttackRef.current && local.class) {
         const spellId = BASIC_ATTACK[local.class];
-        if (spellId && !(local.cooldowns[spellId] > 0)) {
+        if (spellId && (debugMode || !(local.cooldowns[spellId] > 0))) {
           const fwd = new THREE.Vector3();
           camera.getWorldDirection(fwd);
           basicAttack = { aimDir: { x: fwd.x, y: fwd.y, z: fwd.z } };
           const spell = getSpell(spellId);
-          if (spell) useGameStore.getState().setLocalCooldown(spellId, spell.cooldown * 1000);
+          // Debug mode: server never sets a cooldown for this spell, so don't
+          // predict one locally either -- otherwise this optimistic guess
+          // would briefly block repeat fire until the next server tick
+          // corrects it back to 0.
+          if (spell && !debugMode) useGameStore.getState().setLocalCooldown(spellId, spell.cooldown * 1000);
           audioManager.playSound('hitscan_fire');
         }
       }
@@ -246,12 +261,12 @@ export function CameraController({ ws, prediction }: Props) {
       let melee: { aimDir: Vec3 } | null = null;
       if (meleeFired && local.class) {
         const spellId = MELEE_ATTACK[local.class];
-        if (spellId && !(local.cooldowns[spellId] > 0)) {
+        if (spellId && (debugMode || !(local.cooldowns[spellId] > 0))) {
           const fwd = new THREE.Vector3();
           camera.getWorldDirection(fwd);
           melee = { aimDir: { x: fwd.x, y: fwd.y, z: fwd.z } };
           const spell = getSpell(spellId);
-          if (spell) useGameStore.getState().setLocalCooldown(spellId, spell.cooldown * 1000);
+          if (spell && !debugMode) useGameStore.getState().setLocalCooldown(spellId, spell.cooldown * 1000);
           audioManager.playSound('melee_swing');
         }
       }
@@ -264,7 +279,7 @@ export function CameraController({ ws, prediction }: Props) {
       if (mobilityFired && local.isAlive && local.class) {
         const mSpellId = MOBILITY_SPELL[local.class];
         const mSpell = mSpellId ? getSpell(mSpellId) : null;
-        if (mSpell && !(local.cooldowns[mSpellId] > 0)) {
+        if (mSpell && !debugMode && !(local.cooldowns[mSpellId] > 0)) {
           useGameStore.getState().setLocalCooldown(mSpellId, mSpell.cooldown * 1000);
         }
       }

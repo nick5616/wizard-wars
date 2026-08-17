@@ -25,6 +25,7 @@ const CLASS_OPTIONS: { id: WizardClass; label: string; color: string; key: strin
 // actually happens.
 export function DeathScreen({ ws }: DeathScreenProps) {
   const local = useGameStore((s) => s.local);
+  const lastDeath = useGameStore((s) => s.lastDeath);
   const rank = rankForLevel(local.level);
 
   const branchGroup = local.class ? Object.keys(local.divergedBranch)[0] : undefined;
@@ -82,6 +83,13 @@ export function DeathScreen({ ws }: DeathScreenProps) {
       <div style={{ fontSize: 14, color: '#999', letterSpacing: 2, textTransform: 'uppercase' }}>
         {rank.name} · Level {local.level}
       </div>
+
+      {lastDeath?.killerName && (
+        <div style={{ fontSize: 13, color: '#ff8888', marginTop: 8, letterSpacing: 1 }}>
+          Killed by {lastDeath.killerSymbol ? `${lastDeath.killerSymbol} ` : ''}
+          <span style={{ color: '#fff' }}>{lastDeath.killerName}</span>
+        </div>
+      )}
 
       <div style={{ fontSize: 13, color: '#ccc', marginTop: 18, letterSpacing: 1 }}>
         Press any key to respawn as <span style={{ color: '#eee' }}>{local.class}</span>

@@ -60,17 +60,19 @@ export default function App() {
 
   const voteState = useGameStore((s) => s.voteState);
 
-  // Keep the store flag in sync so CameraController can block inputs.
-  // A branch-choice vote blocks the same way a menu does -- the player is
-  // hidden and frozen server-side for its duration (see Room.processInput's
-  // isChoosingBranch check), so local input needs to stop too.
+  // Keep the store flag in sync so CameraController can block inputs. Only
+  // the once-per-life fork vote blocks -- the player is hidden and frozen
+  // server-side for its duration (see Room.processInput's isChoosingBranch
+  // check), so local input needs to stop too. An ordinary point-spend prompt
+  // (voteState.blocking === false) is a light, non-blocking corner nudge and
+  // must NOT freeze the camera/movement.
   useEffect(() => {
-    const blocking = showSkillTree || showPauseMenu || showExperimentLab || phase === 'class_select' || phase === 'connecting' || !!voteState;
+    const blocking = showSkillTree || showPauseMenu || showExperimentLab || phase === 'class_select' || phase === 'connecting' || voteState?.blocking === true;
     useGameStore.getState().setMenuOpen(blocking);
   }, [showSkillTree, showPauseMenu, showExperimentLab, phase, voteState]);
   const {
     setPhase, applyTick, setLocalClass, addKillFeedEntry, setLocalAlive, setLocalPosition, spawnDamageNumber,
-    pushNotification, setVoteState,
+    pushNotification, setVoteState, setLastDeath,
   } = useGameStore.getState();
   const { setLocalPlayerId, setRoomId } = useNetworkStore.getState();
 
@@ -153,12 +155,11 @@ export default function App() {
     });
 
     const offVotePrompt = wsClient.on(S2C.SKILL_VOTE_PROMPT, (msg) => {
-      const timeoutMs = msg.timeoutMs as number;
       setVoteState({
-        branchGroup: msg.branchGroup as string,
+        promptId: msg.promptId as string,
+        branchGroup: (msg.branchGroup as string | null) ?? null,
         options: msg.options as { id: string; label: string; description: string }[],
-        expiresAt: Date.now() + timeoutMs,
-        totalMs: timeoutMs,
+        blocking: !!msg.blocking,
       });
       audioManager.playSound('vote_open');
     });
@@ -203,6 +204,11 @@ export default function App() {
       if (msg.playerId === localId) {
         setLocalAlive(false);
         setPhase('dead');
+        setLastDeath({
+          killerName: (msg.killerName as string | null) ?? null,
+          killerSymbol: (msg.killerSymbol as string | null) ?? null,
+          spellId: (msg.spellId as string | null) ?? null,
+        });
         audioManager.playSound('death_generic');
       }
     });
@@ -246,7 +252,14 @@ export default function App() {
     const onPointerLockChange = () => {
       if (!document.pointerLockElement) {
         const p = useGameStore.getState().phase;
-        if (p === 'playing' || p === 'dead') {
+        // The fork-choice screen (SkillVotePrompt) deliberately releases
+        // pointer lock itself when it opens so the cursor is visible to
+        // click an option -- without this guard, that release looked
+        // identical to the player pressing Escape, so picking a fork
+        // silently queued the pause menu open underneath it (invisible
+        // behind the higher z-index fork screen) and it popped the instant
+        // the fork screen unmounted.
+        if ((p === 'playing' || p === 'dead') && !useGameStore.getState().voteState?.blocking) {
           setShowPauseMenu(true);
           setShowSkillTree(false);
         }

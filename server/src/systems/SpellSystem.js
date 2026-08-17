@@ -38,8 +38,9 @@ export class SpellSystem {
     // Dark The Abyss: a primed free cast skips the cooldown check and (below) the windup entirely
     const isAbyssFreeCast = player.hasAbyssFreeCast;
 
-    // Check cooldown
-    if (!isAbyssFreeCast && player.isOnCooldown(spellId)) {
+    // Check cooldown — debug mode skips every cooldown gate in this file (see also
+    // handleMobility / handleBasicAttack / handleMelee below).
+    if (!isAbyssFreeCast && !player.isDebugMode && player.isOnCooldown(spellId)) {
       return this._deny(player, spellId, 'on_cooldown', player.getCooldownRemaining(spellId));
     }
 
@@ -84,10 +85,11 @@ export class SpellSystem {
       if (!target || !target.hasEffect('freeze')) return this._deny(player, spellId, 'target_not_frozen');
     }
 
-    // Set cooldown — a primed Abyss free cast consumes the buff and skips it entirely
+    // Set cooldown — a primed Abyss free cast consumes the buff and skips it entirely;
+    // debug mode never sets one at all, so the spell stays permanently ready.
     if (isAbyssFreeCast) {
       player.hasAbyssFreeCast = false;
-    } else {
+    } else if (!player.isDebugMode) {
       player.setCooldown(spellId, spell.cooldown);
     }
 
@@ -96,7 +98,7 @@ export class SpellSystem {
       type: S2C.SPELL_CAST,
       spellId,
       slotIndex,
-      cooldownMs: isAbyssFreeCast ? 0 : spell.cooldown * 1000,
+      cooldownMs: (isAbyssFreeCast || player.isDebugMode) ? 0 : spell.cooldown * 1000,
     });
 
     // Windup spells (aoe already has its own telegraph-then-resolve path via
@@ -191,9 +193,9 @@ export class SpellSystem {
     if (!input?.mobilityForced && (!player.isAlive || player.hasEffect('stun'))) return;
 
     const spell = getSpell(spellId);
-    if (!spell || player.isOnCooldown(spellId)) return;
+    if (!spell || (!player.isDebugMode && player.isOnCooldown(spellId))) return;
 
-    player.setCooldown(spellId, spell.cooldown);
+    if (!player.isDebugMode) player.setCooldown(spellId, spell.cooldown);
 
     switch (player.class) {
       case 'fire':  this._magmaDash(player, spell, input); break;
@@ -213,9 +215,9 @@ export class SpellSystem {
     const spellId = BASIC_ATTACK[player.class];
     if (!spellId || !player.isAlive || player.hasEffect('stun')) return;
     const spell = getSpell(spellId);
-    if (!spell || player.isOnCooldown(spellId)) return;
+    if (!spell || (!player.isDebugMode && player.isOnCooldown(spellId))) return;
 
-    player.setCooldown(spellId, spell.cooldown);
+    if (!player.isDebugMode) player.setCooldown(spellId, spell.cooldown);
     this._castHitscan(player, spell, aimDir, clientTimestamp);
   }
 
@@ -223,9 +225,9 @@ export class SpellSystem {
     const spellId = MELEE_ATTACK[player.class];
     if (!spellId || !player.isAlive || player.hasEffect('stun')) return;
     const spell = getSpell(spellId);
-    if (!spell || player.isOnCooldown(spellId)) return;
+    if (!spell || (!player.isDebugMode && player.isOnCooldown(spellId))) return;
 
-    player.setCooldown(spellId, spell.cooldown);
+    if (!player.isDebugMode) player.setCooldown(spellId, spell.cooldown);
 
     const range = spell.radius; // reused field as melee reach, see shared/spells.js MELEE_ATTACKS
     let hitPlayerId = null;
@@ -1100,6 +1102,9 @@ export class SpellSystem {
       id,
       type: 'aoe',
       spellId: 'permafrost_trail',
+      school: 'ice',
+      color: '#a0d8ff',
+      glowColor: '#c8f0ff',
       ownerId: player.id,
       position: { x: player.position.x, y: 0, z: player.position.z },
       radius: 1.5,
@@ -1127,6 +1132,9 @@ export class SpellSystem {
       id,
       type: 'aoe',
       spellId: 'void_tendrils',
+      school: 'dark',
+      color: '#4400aa',
+      glowColor: '#6600cc',
       ownerId,
       position: { x: position.x, y: 0, z: position.z },
       radius: 3.0,
@@ -1151,6 +1159,9 @@ export class SpellSystem {
       id,
       type: 'aoe',
       spellId: 'terra_domain_spire',
+      school: 'earth',
+      color: '#8B6914',
+      glowColor: '#6B5010',
       ownerId,
       position,
       radius: 2.0,
@@ -1308,6 +1319,9 @@ export class SpellSystem {
       id: trailId,
       type: 'aoe',
       spellId: 'magma_dash_trail',
+      school: 'fire',
+      color: '#ff4500',
+      glowColor: '#ff6b2b',
       ownerId: player.id,
       position: { ...player.position },
       radius: 2,
@@ -1338,6 +1352,9 @@ export class SpellSystem {
       id: frostId,
       type: 'aoe',
       spellId: 'glacier_step_frost',
+      school: 'ice',
+      color: '#a0d8ff',
+      glowColor: '#c8f0ff',
       ownerId: player.id,
       position: { ...player.position },
       radius: player.unlockedNodes.has('cryogenic') ? 4 : 3,
@@ -1397,6 +1414,9 @@ export class SpellSystem {
       id: slamId,
       type: 'aoe',
       spellId: 'stone_launch_slam',
+      school: 'earth',
+      color: '#8B6914',
+      glowColor: '#a08030',
       ownerId: player.id,
       position: { ...player.position },
       radius: 3,
@@ -1420,6 +1440,9 @@ export class SpellSystem {
         id: fissureId,
         type: 'aoe',
         spellId: 'the_deep_fissure',
+        school: 'earth',
+        color: '#6B5010',
+        glowColor: '#8B6914',
         ownerId: player.id,
         position: { x: player.position.x, y: 0, z: player.position.z },
         radius: 1.0,
@@ -1441,17 +1464,29 @@ export class SpellSystem {
     }
   }
 
+  /** Purely visual one-shot burst (currently just Phoenix's fatal-blow proc) — type 'aoe' with 0 damage so it actually renders via AoeSpell.tsx instead of an effect.type nothing in SpellRenderer knows how to draw. */
   triggerEffect(effectType, position, ownerId) {
     const id = uuid();
+    const now = Date.now();
     this.room.effects.set(id, {
       id,
-      type: effectType,
+      type: 'aoe',
+      spellId: effectType,
+      school: 'fire',
+      color: '#ff8800',
+      glowColor: '#ffcc00',
       ownerId,
-      position,
+      position: { x: position.x, y: 0, z: position.z },
       radius: 3,
       damage: 0,
-      startedAt: Date.now(),
-      expiresAt: Date.now() + 800,
+      statusEffect: null,
+      shape: 'point',
+      windupMs: 0,
+      duration: 0,
+      startedAt: now,
+      activatesAt: now,
+      expiresAt: now + 800,
+      triggered: false,
       active: true,
     });
   }
