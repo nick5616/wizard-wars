@@ -29,6 +29,7 @@ export class Player {
     this.yaw = 0;
     this.pitch = 0;
     this.isGrounded = false;
+    this.airJumpsUsed = 0; // double jump: refreshed to 0 whenever grounded
 
     // Spells
     this.equippedSpells = Array(MAX_SPELL_SLOTS).fill(null); // up to 10 active slots, opened as spells unlock
@@ -114,6 +115,7 @@ export class Player {
     this.health = this.maxHealth;
     this.position = { ...position };
     this.velocity = { x: 0, y: 0, z: 0 };
+    this.airJumpsUsed = 0;
     this.activeEffects.clear();
     this.oncePerLifeUsed.clear();
     this.parryActive = false;

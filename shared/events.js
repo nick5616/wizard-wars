@@ -57,4 +57,5 @@ export const INPUT_FLAGS = {
   RIGHT:    1 << 3,
   JUMP:     1 << 4,
   MOBILITY: 1 << 5,
+  JUMP_EDGE: 1 << 6, // rising edge of the jump key (computed client-side); gates double jump separately from the held-down JUMP bit that drives ground auto-bhop
 };

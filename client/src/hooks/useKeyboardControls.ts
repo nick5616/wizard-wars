@@ -42,6 +42,14 @@ export function useKeyboardControls() {
   });
 
   const onKeyDown = useCallback((e: KeyboardEvent) => {
+    // Don't hijack keystrokes meant for a text field (e.g. the name input
+    // on the class-select screen) -- WASD/F/Space would otherwise be eaten
+    // by preventDefault before they ever reach the input's value.
+    const target = e.target as HTMLElement | null;
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+      return;
+    }
+
     const key = KEY_MAP[e.code];
     if (key) {
       e.preventDefault();

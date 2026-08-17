@@ -50,6 +50,9 @@ export function CameraController({ ws, prediction }: Props) {
   const pitchRef = useRef(0);
   const posRef = useRef({ x: 0, y: PLAYER_HEIGHT, z: 0 });
   const velRef = useRef({ x: 0, y: 0, z: 0 });
+  const airJumpsUsedRef = useRef(0);
+  const wasJumpDownRef = useRef(false);
+  const pendingJumpEdgeRef = useRef(false); // sticky until the next throttled network send consumes it, so a fast press can't fall between two 64Hz sends and never reach the server
   const inputTickRef = useRef(0);
   const lastCastRef = useRef(false);
   const lastBasicAttackRef = useRef(false);
@@ -128,6 +131,7 @@ export function CameraController({ ws, prediction }: Props) {
     if (local.isAlive && !wasAliveRef.current) {
       posRef.current = { ...local.position };
       velRef.current = { x: 0, y: 0, z: 0 };
+      airJumpsUsedRef.current = 0;
     }
     wasAliveRef.current = local.isAlive;
 
@@ -154,20 +158,31 @@ export function CameraController({ ws, prediction }: Props) {
     localOrientation.pitch = pitchRef.current;
 
     // ── Client-side prediction ──────────────────────────────────────────────
+    // Jump edge (rising edge of the key) gates the double jump separately
+    // from the held-down JUMP bit, which drives ground auto-bhop -- see
+    // shared/events.js INPUT_FLAGS.JUMP_EDGE. Detected every rendered frame
+    // (so live prediction double-jumps the instant space is pressed) but
+    // stays pending until the throttled network-send block below actually
+    // ships it, so a press between two 64Hz sends can't be silently dropped.
+    if (movement.jumping && !wasJumpDownRef.current) pendingJumpEdgeRef.current = true;
+    wasJumpDownRef.current = movement.jumping;
+
     let flags = 0;
     if (movement.forward)  flags |= INPUT_FLAGS.FORWARD;
     if (movement.backward) flags |= INPUT_FLAGS.BACKWARD;
     if (movement.left)     flags |= INPUT_FLAGS.LEFT;
     if (movement.right)    flags |= INPUT_FLAGS.RIGHT;
     if (movement.jumping)  flags |= INPUT_FLAGS.JUMP;
+    if (pendingJumpEdgeRef.current) flags |= INPUT_FLAGS.JUMP_EDGE;
     if (movement.mobility) flags |= INPUT_FLAGS.MOBILITY;
 
     const barrierCircles = Object.values(useGameStore.getState().barriers)
       .filter((b) => b.active)
       .map((b) => ({ x: b.position.x, z: b.position.z, radius: b.width / 2 }));
-    const result = prediction.predict(posRef.current, velRef.current, flags, yawRef.current, dt, barrierCircles);
+    const result = prediction.predict(posRef.current, velRef.current, flags, yawRef.current, dt, barrierCircles, airJumpsUsedRef.current);
     posRef.current = result.pos;
     velRef.current = result.vel;
+    airJumpsUsedRef.current = result.airJumpsUsed;
 
     if (useGameStore.getState().thirdPerson) {
       // Valheim-style chase cam: pulled well back and up above the character
@@ -292,6 +307,8 @@ export function CameraController({ ws, prediction }: Props) {
           useGameStore.getState().setLocalCooldown(mSpellId, mSpell.cooldown * 1000);
         }
       }
+
+      pendingJumpEdgeRef.current = false; // this tick's flags already captured it above
 
       const seq = prediction.nextSeq();
       ws.send(C2S.PLAYER_INPUT, {

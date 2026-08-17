@@ -5,16 +5,18 @@ import { ProgressionSystem } from './systems/ProgressionSystem.js';
 import { LagCompensation } from './systems/LagCompensation.js';
 import { BotController } from './systems/BotAI.js';
 import { Bot } from './Bot.js';
-import { S2C } from 'shared/events';
+import { S2C, INPUT_FLAGS } from 'shared/events';
 import {
   TICK_RATE, TICK_INTERVAL, GRAVITY, BASE_MOVE_SPEED, PLAYER_HEIGHT,
   ARENA_RADIUS, JUMP_FORCE, PLAYER_MAX_HEALTH, RESPAWN_DELAY,
   STARTING_SKILL_POINTS, POINTS_PER_LEVEL,
   STATE_HISTORY_TICKS, MAX_CONCURRENT_DOMAINS, PLAYER_CAPSULE_RADIUS,
+  GROUND_ACCEL, AIR_ACCEL, GROUND_FRICTION, STOP_SPEED, AIR_CAP_SPEED, MAX_AIR_JUMPS,
 } from 'shared/constants';
 import { getSpell } from 'shared/spells';
 import { XP_PER_KILL, levelFromXp, rankForLevel, hatBuffTierForLevel, HAT_BUFF_DAMAGE_MULT } from 'shared/leveling';
 import { terrainHeightAt, resolveTerrainCollision, resolveCircleObstacles } from 'shared/mapLayout';
+import { applyGroundFriction, applyGroundAccel, applyAirAccel, normalizeWishDir } from 'shared/movement';
 import { STATUS_EFFECTS, DOMAIN_CONFIGS } from 'shared/gameConfig';
 import { CLASS_LABEL, classSymbol } from 'shared/classFlavor';
 
@@ -217,28 +219,43 @@ export class Room {
     const footwork = player.class === 'sword' && player.unlockedNodes.has('footwork') ? 1.08 : 1;
     const speed = BASE_MOVE_SPEED * speedMult * footwork * this._domainSpeedMultiplier(player);
 
-    // Horizontal movement
+    // Horizontal movement: Source-engine-style ground/air acceleration (see
+    // shared/movement.js) instead of instantly setting velocity to the wish
+    // speed -- this gives momentum, ground friction, and (crucially) air
+    // strafing, which is what makes bunny hopping possible.
     const yaw = player.yaw;
     const cos = Math.cos(yaw);
     const sin = Math.sin(yaw);
-    let vx = 0, vz = 0;
+    let wishX = 0, wishZ = 0;
 
-    if (input.flags & 1)  { vz -= cos; vx -= sin; } // forward
-    if (input.flags & 2)  { vz += cos; vx += sin; } // backward
-    if (input.flags & 4)  { vz += sin; vx -= cos; } // left
-    if (input.flags & 8)  { vz -= sin; vx += cos; } // right
+    if (input.flags & 1)  { wishZ -= cos; wishX -= sin; } // forward
+    if (input.flags & 2)  { wishZ += cos; wishX += sin; } // backward
+    if (input.flags & 4)  { wishZ += sin; wishX -= cos; } // left
+    if (input.flags & 8)  { wishZ -= sin; wishX += cos; } // right
 
-    const len = Math.sqrt(vx * vx + vz * vz);
-    if (len > 0) { vx = (vx / len) * speed; vz = (vz / len) * speed; }
+    let wishDir = normalizeWishDir(wishX, wishZ);
 
-    // Stun locks out movement input entirely (still falls/settles under gravity below)
-    if (player.hasEffect('stun')) { vx = 0; vz = 0; }
+    // Stun and freeze/petrify (speedMult 0) lock out movement input entirely
+    // (still falls/settles under gravity below).
+    const immobilized = player.hasEffect('stun') || speedMult === 0;
+    if (immobilized) wishDir = { x: 0, z: 0 };
 
-    player.velocity.x = vx;
-    player.velocity.z = vz;
+    if (player.isGrounded) {
+      applyGroundFriction(player.velocity, GROUND_FRICTION, STOP_SPEED, dt);
+      applyGroundAccel(player.velocity, wishDir, speed, GROUND_ACCEL, dt);
+    } else {
+      applyAirAccel(player.velocity, wishDir, speed, AIR_ACCEL, AIR_CAP_SPEED, dt);
+    }
 
-    // Earth Bedrock: standing still (grounded, no horizontal input) for 1.5s grants a damage buff
-    if (vx === 0 && vz === 0 && player.isGrounded) {
+    // Immobilized is a hard lock, not just a lack of input -- kill any
+    // residual horizontal momentum too, rather than letting friction/accel
+    // taper it off (matters most in the air, where there's no friction).
+    if (immobilized) { player.velocity.x = 0; player.velocity.z = 0; }
+
+    const horizSpeed = Math.hypot(player.velocity.x, player.velocity.z);
+
+    // Earth Bedrock: standing still (grounded, no horizontal drift) for 1.5s grants a damage buff
+    if (horizSpeed < 0.05 && player.isGrounded) {
       if (!player.bedrockIdleSince) player.bedrockIdleSince = now;
       player.bedrock = player.unlockedNodes.has('bedrock') && (now - player.bedrockIdleSince) >= 1500;
     } else {
@@ -247,7 +264,7 @@ export class Room {
     }
 
     // Ice Permafrost: moving leaves a brief slowing frost trail (throttled)
-    if (player.class === 'ice' && player.unlockedNodes.has('permafrost') && (vx !== 0 || vz !== 0) && now >= player.nextPermafrostAt) {
+    if (player.class === 'ice' && player.unlockedNodes.has('permafrost') && horizSpeed > 0.05 && now >= player.nextPermafrostAt) {
       player.nextPermafrostAt = now + 400;
       this.spellSystem._spawnPermafrostTrail(player);
     }
@@ -260,10 +277,17 @@ export class Room {
       player.velocity.y += GRAVITY * dt;
     }
 
-    // Jump
-    if ((input.flags & 16) && player.isGrounded) {
+    // Jump: held JUMP bit auto-bhops off the ground (Source-style
+    // sv_autobunnyhop); the double jump only fires on JUMP_EDGE (rising edge
+    // of the key, computed client-side) so holding space doesn't burn both
+    // charges in the same two ticks it takes to leave the ground.
+    if ((input.flags & INPUT_FLAGS.JUMP) && player.isGrounded) {
       player.velocity.y = JUMP_FORCE;
       player.isGrounded = false;
+      player.airJumpsUsed = 0;
+    } else if (!player.isGrounded && (input.flags & INPUT_FLAGS.JUMP_EDGE) && player.airJumpsUsed < MAX_AIR_JUMPS) {
+      player.velocity.y = JUMP_FORCE;
+      player.airJumpsUsed++;
     }
 
     // Integrate position
@@ -294,6 +318,7 @@ export class Room {
       player.position.y = groundY;
       player.velocity.y = 0;
       player.isGrounded = true;
+      player.airJumpsUsed = 0;
     } else {
       player.isGrounded = false;
     }

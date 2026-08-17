@@ -10,8 +10,13 @@
  *     position to correct any drift.
  */
 
-import { BASE_MOVE_SPEED, JUMP_FORCE, GRAVITY, PLAYER_HEIGHT, ARENA_RADIUS, PLAYER_CAPSULE_RADIUS } from 'shared/constants';
+import {
+  BASE_MOVE_SPEED, JUMP_FORCE, GRAVITY, PLAYER_HEIGHT, ARENA_RADIUS, PLAYER_CAPSULE_RADIUS,
+  GROUND_ACCEL, AIR_ACCEL, GROUND_FRICTION, STOP_SPEED, AIR_CAP_SPEED, MAX_AIR_JUMPS,
+} from 'shared/constants';
 import { terrainHeightAt, resolveTerrainCollision, resolveCircleObstacles } from 'shared/mapLayout';
+import { applyGroundFriction, applyGroundAccel, applyAirAccel, normalizeWishDir } from 'shared/movement';
+import { INPUT_FLAGS } from 'shared/events';
 import type { Vec3, PendingInput } from '../types/game.types';
 
 export interface CircleObstacle { x: number; z: number; radius: number; }
@@ -25,29 +30,48 @@ export class ClientPrediction {
   }
 
   /** Predict where the player will be after applying this input locally. */
-  predict(currentPos: Vec3, currentVel: Vec3, flags: number, yaw: number, dt: number, barriers: CircleObstacle[] = []): { pos: Vec3; vel: Vec3 } {
+  predict(
+    currentPos: Vec3, currentVel: Vec3, flags: number, yaw: number, dt: number,
+    barriers: CircleObstacle[] = [], airJumpsUsed = 0,
+  ): { pos: Vec3; vel: Vec3; airJumpsUsed: number } {
     const speedMult = 1.0; // passives can modify later
     const speed = BASE_MOVE_SPEED * speedMult;
 
     const cos = Math.cos(yaw), sin = Math.sin(yaw);
-    let vx = 0, vz = 0;
+    let wishX = 0, wishZ = 0;
 
-    if (flags & 1)  { vz -= cos; vx -= sin; }
-    if (flags & 2)  { vz += cos; vx += sin; }
-    if (flags & 4)  { vz += sin; vx -= cos; }
-    if (flags & 8)  { vz -= sin; vx += cos; }
+    if (flags & 1)  { wishZ -= cos; wishX -= sin; }
+    if (flags & 2)  { wishZ += cos; wishX += sin; }
+    if (flags & 4)  { wishZ += sin; wishX -= cos; }
+    if (flags & 8)  { wishZ -= sin; wishX += cos; }
 
-    const len = Math.sqrt(vx * vx + vz * vz);
-    if (len > 0) { vx = (vx / len) * speed; vz = (vz / len) * speed; }
+    const wishDir = normalizeWishDir(wishX, wishZ);
 
-    let vy = currentVel.y;
     const currentGroundY = PLAYER_HEIGHT + terrainHeightAt(currentPos.x, currentPos.z);
     const isGrounded = currentPos.y <= currentGroundY + 0.05;
 
+    // Source-engine-style ground/air acceleration (see shared/movement.js) --
+    // mirrors server/src/Room.js _simulatePlayer exactly so reconciliation
+    // doesn't fight prediction.
+    const vel = { x: currentVel.x, z: currentVel.z };
+    if (isGrounded) {
+      applyGroundFriction(vel, GROUND_FRICTION, STOP_SPEED, dt);
+      applyGroundAccel(vel, wishDir, speed, GROUND_ACCEL, dt);
+    } else {
+      applyAirAccel(vel, wishDir, speed, AIR_ACCEL, AIR_CAP_SPEED, dt);
+    }
+    let vx = vel.x, vz = vel.z;
+
+    let vy = currentVel.y;
     if (!isGrounded) vy += GRAVITY * dt;
 
-    if ((flags & 16) && isGrounded) {
+    let nextAirJumpsUsed = airJumpsUsed;
+    if ((flags & INPUT_FLAGS.JUMP) && isGrounded) {
       vy = JUMP_FORCE;
+      nextAirJumpsUsed = 0;
+    } else if (!isGrounded && (flags & INPUT_FLAGS.JUMP_EDGE) && airJumpsUsed < MAX_AIR_JUMPS) {
+      vy = JUMP_FORCE;
+      nextAirJumpsUsed = airJumpsUsed + 1;
     }
 
     let x = currentPos.x + vx * dt;
@@ -70,7 +94,7 @@ export class ClientPrediction {
     // stutter and prediction doesn't fight reconciliation near terrain.
     const groundY = PLAYER_HEIGHT + terrainHeightAt(x, z);
     const huggingSurface = vy <= 0 && (y - groundY) <= 0.3;
-    if (y <= groundY || huggingSurface) { y = groundY; vy = 0; }
+    if (y <= groundY || huggingSurface) { y = groundY; vy = 0; nextAirJumpsUsed = 0; }
 
     const dist = Math.sqrt(x * x + z * z);
     if (dist > ARENA_RADIUS - 1) {
@@ -81,6 +105,7 @@ export class ClientPrediction {
     return {
       pos: { x, y, z },
       vel: { x: vx, y: vy, z: vz },
+      airJumpsUsed: nextAirJumpsUsed,
     };
   }
 
@@ -110,12 +135,14 @@ export class ClientPrediction {
     // Re-simulate unacknowledged inputs
     let pos = { ...serverPos };
     let vel = { ...currentVel };
+    let airJumpsUsed = 0; // server doesn't report this; matches the currentVel=0 approximation callers already pass in
     const dt = 1 / 64; // one tick
 
     for (const input of this.pending) {
-      const result = this.predict(pos, vel, input.flags, input.yaw, dt, barriers);
+      const result = this.predict(pos, vel, input.flags, input.yaw, dt, barriers, airJumpsUsed);
       pos = result.pos;
       vel = result.vel;
+      airJumpsUsed = result.airJumpsUsed;
     }
 
     return pos;
