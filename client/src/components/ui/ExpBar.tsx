@@ -10,7 +10,7 @@ export function ExpBar() {
   return (
     <div style={{
       position: 'fixed',
-      bottom: 152,
+      bottom: 174, // clears the taller card-style SpellBar (see SpellCard.tsx)
       left: '50%',
       transform: 'translateX(-50%)',
       width: 280,

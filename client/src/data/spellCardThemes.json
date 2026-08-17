@@ -1,0 +1,16 @@
+{
+  "schools": {
+    "fire": { "frame": "jagged", "cornerGlyph": "▲", "patternSalt": 11 },
+    "ice": { "frame": "crystalline", "cornerGlyph": "❖", "patternSalt": 22 },
+    "dark": { "frame": "torn", "cornerGlyph": "◈", "patternSalt": 33 },
+    "sword": { "frame": "beveled", "cornerGlyph": "◆", "patternSalt": 44 },
+    "earth": { "frame": "rough", "cornerGlyph": "⬢", "patternSalt": 55 }
+  },
+  "rarityTiers": [
+    { "maxTier": 1, "name": "common", "gem": "#8890a0" },
+    { "maxTier": 3, "name": "uncommon", "gem": "#4fd47a" },
+    { "maxTier": 6, "name": "rare", "gem": "#4fa9ff" },
+    { "maxTier": 9, "name": "epic", "gem": "#c264ff" },
+    { "maxTier": 99, "name": "legendary", "gem": "#ffcf4d" }
+  ]
+}

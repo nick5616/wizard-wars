@@ -524,15 +524,16 @@ export class SpellSystem {
     const effectId = uuid();
     // Self-centered spells (Blood Nova) land on the caster; line-shaped spells
     // (Fissure) start at the caster's feet and extend out via direction*length;
-    // everything else casts at a fixed distance out along the aim direction —
-    // unless the spell snaps to a player under the crosshair (Lightning Strike).
+    // everything else casts at a fixed distance out along the aim direction,
+    // snapping onto a player's feet if the crosshair is over one -- every
+    // aimed aoe works this way now, not just Lightning Strike, so the ground
+    // reticle (AoeTargetReticle.tsx) is always telling the truth about where
+    // it'll land.
     let targetPos;
     if (spell.selfCast || spell.length) {
       targetPos = { x: player.position.x, y: 0, z: player.position.z };
-    } else if (spell.groundSnapToPlayer) {
-      targetPos = this._groundTargetPos(player, aimDir, 12);
     } else {
-      targetPos = { x: player.position.x + aimDir.x * 12, y: 0, z: player.position.z + aimDir.z * 12 };
+      targetPos = this._groundTargetPos(player, aimDir, 12);
     }
 
     const effect = {
@@ -660,12 +661,11 @@ export class SpellSystem {
   }
 
   /**
-   * Ground-target point for aim-and-click aoe spells that snap to a player
-   * under the crosshair (Lightning Strike): if the aim ray hits an enemy's
-   * capsule within maxDist, center on their feet; otherwise fall back to the
-   * normal fixed-distance point along aimDir. Mirrors the client-side preview
-   * reticle's own raycast (see LightningTargetReticle.tsx) so what you see
-   * before casting matches where the spell actually lands.
+   * Ground-target point for every aim-and-click aoe spell: if the aim ray
+   * hits an enemy's capsule within maxDist, center on their feet; otherwise
+   * fall back to the normal fixed-distance point along aimDir. Mirrors the
+   * client-side preview reticle's own raycast (see AoeTargetReticle.tsx) so
+   * what you see before casting matches where the spell actually lands.
    */
   _groundTargetPos(player, aimDir, maxDist) {
     const origin = { ...player.position };

@@ -10,6 +10,7 @@ import type { WebSocketClient } from '../../networking/WebSocketClient';
 import { UIButton } from './UIButton';
 import { audioManager } from '../../audio/AudioManager';
 import { legibleAccent } from '../../utils/legibleColor';
+import { SpellTypeIcon, iconKindForSpellId } from './SpellTypeIcon';
 
 interface SkillVotePromptProps {
   ws: WebSocketClient;
@@ -68,6 +69,7 @@ interface Panel {
   color: string;
   label: string;
   description: string;
+  kind: ReturnType<typeof iconKindForSpellId>;
 }
 
 function buildPanels(voteState: { options: { id: string; label: string; description: string }[] }, baseColor: string): Panel[] {
@@ -82,7 +84,8 @@ function buildPanels(voteState: { options: { id: string; label: string; descript
     // "black fire") are deliberately near-black for their 3D effect, which
     // would be invisible as text on this UI's dark panels.
     const color = spell ? legibleAccent(spell.color, spell.glowColor) : baseColor;
-    return { id: opt.id, i, flavor, color, label: opt.label, description: opt.description };
+    const kind = iconKindForSpellId(opt.id);
+    return { id: opt.id, i, flavor, color, label: opt.label, description: opt.description, kind };
   });
 }
 
@@ -157,7 +160,7 @@ function ForkChoiceScreen({ voteState, onChoose }: { voteState: VoteState; onCho
       </div>
 
       <div style={{ display: 'flex', gap: 28, alignItems: 'stretch' }}>
-        {panels.map(({ id, i, flavor, color, label, description }) => (
+        {panels.map(({ id, i, flavor, color, label, description, kind }) => (
           <UIButton
             key={id}
             onClick={() => onChoose(id)}
@@ -197,10 +200,16 @@ function ForkChoiceScreen({ voteState, onChoose }: { voteState: VoteState; onCho
             <div style={{
               display: 'inline-block',
               fontSize: 11, letterSpacing: 2, textTransform: 'uppercase',
-              color: `${color}cc`, marginBottom: 14,
+              color: `${color}cc`, marginBottom: 8,
               border: `1px solid ${color}44`, borderRadius: 3, padding: '3px 9px',
             }}>
               {label}
+            </div>
+
+            {/* Passive vs. spell, and what kind of spell -- not just a name. */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 12, color: '#888' }}>
+              <SpellTypeIcon kind={kind} size={11} color="#888" />
+              <span style={{ fontSize: 10, letterSpacing: 1, textTransform: 'uppercase' }}>{kind}</span>
             </div>
 
             <div style={{ fontSize: 12, color: '#aaa', lineHeight: 1.6 }}>{description}</div>
@@ -245,7 +254,7 @@ function PointSpendPrompt({ voteState, onChoose }: { voteState: VoteState; onCho
         You have {skillPoints} skill point{skillPoints === 1 ? '' : 's'} to spend
       </div>
 
-      {panels.map(({ id, i, color, label, description }) => (
+      {panels.map(({ id, i, color, label, description, kind }) => (
         <UIButton
           key={id}
           onClick={() => onChoose(id)}
@@ -273,6 +282,10 @@ function PointSpendPrompt({ voteState, onChoose }: { voteState: VoteState; onCho
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2, paddingRight: 34 }}>
             <span style={{ fontSize: 9, color: `${color}cc`, border: `1px solid ${color}55`, borderRadius: 3, padding: '1px 4px' }}>F{i + 1}</span>
             <span style={{ fontSize: 12, color: '#eee' }}>{label}</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 3, color: '#888' }}>
+            <SpellTypeIcon kind={kind} size={10} color="#888" />
+            <span style={{ fontSize: 9, letterSpacing: 1, textTransform: 'uppercase' }}>{kind}</span>
           </div>
           <div style={{ fontSize: 10, color: '#999', lineHeight: 1.4 }}>{description}</div>
         </UIButton>

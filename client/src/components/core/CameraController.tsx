@@ -200,6 +200,21 @@ export function CameraController({ ws, prediction }: Props) {
     if (inputTickRef.current >= 1 / 64) {
       inputTickRef.current -= 1 / 64;
 
+      // Aim direction, corrected for the eye/camera offset: the server's hit
+      // detection (and every visual projectile/beam origin) is anchored at
+      // the eye/wand, not the camera (see SpellSystem._castHitscan). In first
+      // person eye and camera nearly coincide so this is just camera-forward;
+      // in third person (camera pulled back and up for the Valheim-style
+      // view) two parallel rays from different origins never meet, which is
+      // exactly why shots were landing below the crosshair. Aiming from the
+      // eye toward a point far out along the camera's own forward ray bends
+      // the direction just enough that it actually lands on whatever's under
+      // the crosshair.
+      const eyePos = new THREE.Vector3(posRef.current.x, posRef.current.y, posRef.current.z);
+      const camFwd = new THREE.Vector3();
+      camera.getWorldDirection(camFwd);
+      const fwd = camera.position.clone().addScaledVector(camFwd, 200).sub(eyePos).normalize();
+
       const lmbDown = lmbRef.current;
       let cast: CastInput | null = null;
 
@@ -207,8 +222,6 @@ export function CameraController({ ws, prediction }: Props) {
       if (lmbDown && !lastCastRef.current) {
         const spellId = local.equippedSpells[local.activeSlot];
         if (spellId && local.isAlive) {
-          const fwd = new THREE.Vector3();
-          camera.getWorldDirection(fwd);
           cast = {
             spellId,
             slotIndex: local.activeSlot,
@@ -222,8 +235,8 @@ export function CameraController({ ws, prediction }: Props) {
             // Ray from the actual eye position, not camera.position -- in
             // third-person the camera sits behind the player, and raycasting
             // from there would offset targeting (and could occlude on the
-            // player's own third-person model).
-            const eyePos = new THREE.Vector3(posRef.current.x, posRef.current.y, posRef.current.z);
+            // player's own third-person model). Uses the same corrected fwd
+            // as above so target acquisition matches where shots actually go.
             raycasterRef.current.set(eyePos, fwd);
             raycasterRef.current.far = CAST_MAX_RANGE;
             const hits = raycasterRef.current.intersectObjects(getTargetObjects(), true);
@@ -241,8 +254,6 @@ export function CameraController({ ws, prediction }: Props) {
       if (rmbDown && !lastBasicAttackRef.current && local.class) {
         const spellId = BASIC_ATTACK[local.class];
         if (spellId && (debugMode || !(local.cooldowns[spellId] > 0))) {
-          const fwd = new THREE.Vector3();
-          camera.getWorldDirection(fwd);
           basicAttack = { aimDir: { x: fwd.x, y: fwd.y, z: fwd.z } };
           const spell = getSpell(spellId);
           // Debug mode: server never sets a cooldown for this spell, so don't
@@ -262,8 +273,6 @@ export function CameraController({ ws, prediction }: Props) {
       if (meleeFired && local.class) {
         const spellId = MELEE_ATTACK[local.class];
         if (spellId && (debugMode || !(local.cooldowns[spellId] > 0))) {
-          const fwd = new THREE.Vector3();
-          camera.getWorldDirection(fwd);
           melee = { aimDir: { x: fwd.x, y: fwd.y, z: fwd.z } };
           const spell = getSpell(spellId);
           if (spell && !debugMode) useGameStore.getState().setLocalCooldown(spellId, spell.cooldown * 1000);

@@ -32,9 +32,6 @@ export const FIRE_SPELLS = {
     id: 'lightning_strike', name: 'Lightning Strike', school: 'fire', tier: 4, class: 'fire',
     type: 'aoe', damage: 70, cooldown: 4.0, radius: 2.0, windupMs: 600,
     statusEffect: 'stun', statusDuration: 800,
-    // Snaps the telegraph circle to land under a player the crosshair is
-    // over, instead of always landing at a fixed distance along aim.
-    groundSnapToPlayer: true,
     color: '#ffe066', glowColor: '#ffffff',
   }),
   immolate: def({

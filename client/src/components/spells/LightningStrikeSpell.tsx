@@ -20,9 +20,11 @@ import { buildJaggedSegment } from '../../utils/jaggedLine';
 
 const SPARK_COUNT = 6;
 const SPARK_SEGMENTS = 3;
-const BOLT_COUNT = 6;
+const BOLT_COUNT = 8;
 const BOLT_SEGMENTS = 6;
-const BURST_MS = 450;
+const MAIN_STRANDS = 3; // parallel offset lines faking width for the one dominant central bolt
+const MAIN_SEGMENTS = 9;
+const BURST_MS = 550;
 
 export function LightningStrikeSpell({ effect }: { effect: EffectState }) {
   if (!effect.position) return null;
@@ -63,10 +65,23 @@ export function LightningStrikeSpell({ effect }: { effect: EffectState }) {
       boltGlowLines.push(new THREE.Line(geo, boltGlowMat));
     }
 
+    // The one dominant "big thunderbolt" straight down the middle -- several
+    // parallel offset strands faking width, since LineBasicMaterial's own
+    // linewidth is clamped to 1px on most WebGL backends.
+    const mainBoltLines: THREE.Line[] = [];
+    const mainBoltGeos: THREE.BufferGeometry[] = [];
+    const mainBoltMat = new THREE.LineBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0 });
+    for (let i = 0; i < MAIN_STRANDS; i++) {
+      const geo = new THREE.BufferGeometry();
+      mainBoltGeos.push(geo);
+      mainBoltLines.push(new THREE.Line(geo, mainBoltMat));
+    }
+
     return {
       telegraphMat, burstMat, flashMat,
       sparkLines, sparkGeos, sparkMats,
       boltCoreLines, boltGlowLines, boltGeos, boltCoreMat, boltGlowMat,
+      mainBoltLines, mainBoltGeos, mainBoltMat,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effect.id, color, glow]);
@@ -80,6 +95,8 @@ export function LightningStrikeSpell({ effect }: { effect: EffectState }) {
     for (const g of scene.boltGeos) g.dispose();
     scene.boltCoreMat.dispose();
     scene.boltGlowMat.dispose();
+    for (const g of scene.mainBoltGeos) g.dispose();
+    scene.mainBoltMat.dispose();
   }, [scene]);
 
   const telegraphRef = useRef<THREE.Mesh>(null);
@@ -126,12 +143,16 @@ export function LightningStrikeSpell({ effect }: { effect: EffectState }) {
         }
         const angle = Math.random() * Math.PI * 2;
         const ringR = radius * (0.6 + Math.random() * 0.5);
-        const a = new THREE.Vector3(center.x + Math.cos(angle) * ringR, 0.05, center.z + Math.sin(angle) * ringR);
+        // Local to the group (already offset to `center`, see the returned
+        // <group position={[center.x, 0, center.z]}> below) -- adding
+        // center.x/z again here double-offsets every spark away from the
+        // actual telegraph ring.
+        const a = new THREE.Vector3(Math.cos(angle) * ringR, 0.05, Math.sin(angle) * ringR);
         const inward = Math.random() * radius * 0.35;
         const b = new THREE.Vector3(
-          center.x + Math.cos(angle) * (ringR - inward),
+          Math.cos(angle) * (ringR - inward),
           0.05 + Math.random() * (0.6 + windupT * 1.2),
-          center.z + Math.sin(angle) * (ringR - inward),
+          Math.sin(angle) * (ringR - inward),
         );
         const positions = new Float32Array(buildJaggedSegment(a, b, SPARK_SEGMENTS, 0.25));
         scene.sparkGeos[i].setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -148,15 +169,37 @@ export function LightningStrikeSpell({ effect }: { effect: EffectState }) {
       for (let i = 0; i < BOLT_COUNT; i++) {
         const angle = Math.random() * Math.PI * 2;
         const dist = Math.random() * radius * 0.7;
+        // Local to the group (see the spark fix above -- same bug: this used
+        // to add center.x/z on top of the group's own center offset, which
+        // threw every bolt to roughly double its intended distance from the
+        // caster, easily off-screen or lost against the terrain).
         const top = new THREE.Vector3(
-          center.x + Math.cos(angle) * radius * (0.5 + Math.random() * 0.8),
+          Math.cos(angle) * radius * (0.5 + Math.random() * 0.8),
           6 + Math.random() * 4,
-          center.z + Math.sin(angle) * radius * (0.5 + Math.random() * 0.8),
+          Math.sin(angle) * radius * (0.5 + Math.random() * 0.8),
         );
-        const bottom = new THREE.Vector3(center.x + Math.cos(angle) * dist, 0.05, center.z + Math.sin(angle) * dist);
+        const bottom = new THREE.Vector3(Math.cos(angle) * dist, 0.05, Math.sin(angle) * dist);
         const positions = new Float32Array(buildJaggedSegment(top, bottom, BOLT_SEGMENTS, 0.9));
         scene.boltGeos[i].setAttribute('position', new THREE.BufferAttribute(positions, 3));
         scene.boltGeos[i].attributes.position.needsUpdate = true;
+      }
+
+      // The one dominant bolt, straight down the middle -- several parallel
+      // strands with a small perpendicular offset faking width, since a
+      // single WebGL line reads as a hairline no matter how bright.
+      const mainTop = new THREE.Vector3(0, 14, 0);
+      const mainBottom = new THREE.Vector3(0, 0.05, 0);
+      const mainBase = buildJaggedSegment(mainTop, mainBottom, MAIN_SEGMENTS, 0.5);
+      for (let s = 0; s < MAIN_STRANDS; s++) {
+        const offX = (s - (MAIN_STRANDS - 1) / 2) * 0.07;
+        const offZ = (s - (MAIN_STRANDS - 1) / 2) * 0.05;
+        const strand = mainBase.slice();
+        for (let p = 0; p < strand.length; p += 3) {
+          strand[p] += offX;
+          strand[p + 2] += offZ;
+        }
+        scene.mainBoltGeos[s].setAttribute('position', new THREE.BufferAttribute(new Float32Array(strand), 3));
+        scene.mainBoltGeos[s].attributes.position.needsUpdate = true;
       }
     }
     if (!telegraphing) {
@@ -180,9 +223,14 @@ export function LightningStrikeSpell({ effect }: { effect: EffectState }) {
       scene.boltGlowMat.opacity = boltOpacity * 0.6;
       for (const line of scene.boltCoreLines) line.visible = inBurst;
       for (const line of scene.boltGlowLines) line.visible = inBurst;
+      // Main bolt flickers rather than smoothly fading -- reads as an actual
+      // discharge instead of a dissolve.
+      scene.mainBoltMat.opacity = inBurst ? Math.min(1, boltOpacity + Math.random() * 0.3) : 0;
+      for (const line of scene.mainBoltLines) line.visible = inBurst;
     } else {
       for (const line of scene.boltCoreLines) line.visible = false;
       for (const line of scene.boltGlowLines) line.visible = false;
+      for (const line of scene.mainBoltLines) line.visible = false;
       boltsBuiltRef.current = false;
     }
 
@@ -230,6 +278,7 @@ export function LightningStrikeSpell({ effect }: { effect: EffectState }) {
       {scene.sparkLines.map((line, i) => <primitive key={`spark-${i}`} object={line} />)}
       {scene.boltGlowLines.map((line, i) => <primitive key={`bolt-glow-${i}`} object={line} />)}
       {scene.boltCoreLines.map((line, i) => <primitive key={`bolt-core-${i}`} object={line} />)}
+      {scene.mainBoltLines.map((line, i) => <primitive key={`main-bolt-${i}`} object={line} />)}
     </group>
   );
 }

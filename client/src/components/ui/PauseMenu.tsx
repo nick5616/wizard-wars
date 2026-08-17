@@ -6,6 +6,7 @@ import type { WebSocketClient } from '../../networking/WebSocketClient';
 import type { WizardClass } from '../../types/game.types';
 import { UIButton } from './UIButton';
 import { SpellTypeIcon, iconKindForSpellId } from './SpellTypeIcon';
+import { SpellCard } from './SpellCard';
 import { C2S } from 'shared/events';
 
 const CLASS_COLORS: Record<WizardClass, string> = {
@@ -291,38 +292,22 @@ function SpellsTab({ local, mobilitySpell, classColor, ws }: {
       <div style={{ color: '#aaa', fontSize: 10, letterSpacing: 3, textTransform: 'uppercase', marginBottom: 10 }}>
         Spell Slots — click to select
       </div>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 6, overflowX: 'auto', paddingBottom: 4 }}>
         {local.equippedSpells.slice(0, visibleSlots).map((spellId, i) => {
           const spell = spellId ? getSpell(spellId) : null;
-          const isSelected = selectedSlot === i;
           return (
-            <UIButton
+            <SpellCard
               key={i}
+              spellId={spellId}
+              spell={spell}
+              slotLabel={String(slotLabel(i))}
+              cooldownSec={0}
+              cooldownPct={0}
+              active={selectedSlot === i}
               onClick={() => setSelectedSlot(i)}
-              style={{
-                flex: 1,
-                padding: '10px 6px',
-                background: isSelected ? `${classColor}22` : '#080814',
-                border: `1px solid ${isSelected ? classColor : '#2a2a3c'}`,
-                borderRadius: 4,
-                cursor: 'pointer',
-                textAlign: 'center',
-                transition: 'all 0.12s',
-              }}
-            >
-              <div style={{ color: isSelected ? classColor : '#666', fontSize: 9, letterSpacing: 2, marginBottom: 5 }}>SLOT {slotLabel(i)}</div>
-              {spell ? (
-                <>
-                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: spell.color, margin: '0 auto 5px', boxShadow: `0 0 5px ${spell.glowColor}` }} />
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
-                    <SpellTypeIcon kind={spell.type} size={11} color={isSelected ? classColor : '#888'} />
-                    <div style={{ color: isSelected ? classColor : '#ccc', fontSize: 10, lineHeight: 1.3 }}>{spell.name}</div>
-                  </div>
-                </>
-              ) : (
-                <div style={{ color: '#444', fontSize: 11, marginTop: 4 }}>—</div>
-              )}
-            </UIButton>
+              width={64}
+              height={82}
+            />
           );
         })}
       </div>

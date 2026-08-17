@@ -1,12 +1,12 @@
 /**
  * Pre-cast ground preview for any equipped aoe spell: a circle (or, for
  * line-shaped spells like Fissure, a rectangle) showing where it will land
- * and how big it is, colored per spell, before you've even clicked.
- * Lightning Strike additionally snaps under a player the crosshair is over,
- * mirroring the server's own ground-snap targeting (see
- * SpellSystem._groundTargetPos) so the preview matches where it actually
- * lands. Carries a few faint ambient sparks for that "something's about to
- * happen here" read.
+ * and how big it is, colored per spell, before you've even clicked. Snaps
+ * under a player the crosshair is over, mirroring the server's own
+ * ground-snap targeting (see SpellSystem._groundTargetPos) so the preview
+ * matches where it actually lands, for every aimed aoe spell -- not just
+ * Lightning Strike. Carries a few faint ambient sparks for that "something's
+ * about to happen here" read.
  */
 
 import { useMemo, useRef, useEffect } from 'react';
@@ -50,7 +50,6 @@ export function AoeTargetReticle() {
   const isLine = !!spell?.length;
   const lineLength = spell?.length ?? 0;
   const selfCentered = !!spell?.selfCast;
-  const snapToPlayer = !!spell?.groundSnapToPlayer;
 
   const scene = useMemo(() => {
     const ringMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.35, depthWrite: false, side: THREE.DoubleSide });
@@ -95,7 +94,7 @@ export function AoeTargetReticle() {
         cx = origin.x;
         cz = origin.z;
         ry = Math.atan2(fwd.x, fwd.z);
-      } else if (snapToPlayer) {
+      } else {
         raycasterRef.current.set(origin, fwd);
         raycasterRef.current.far = AIM_DIST;
         const hits = raycasterRef.current.intersectObjects(getTargetObjects(), true);
@@ -108,9 +107,6 @@ export function AoeTargetReticle() {
           cx = origin.x + fwd.x * AIM_DIST;
           cz = origin.z + fwd.z * AIM_DIST;
         }
-      } else {
-        cx = origin.x + fwd.x * AIM_DIST;
-        cz = origin.z + fwd.z * AIM_DIST;
       }
     }
 

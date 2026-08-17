@@ -30,7 +30,6 @@ export interface SpellDef {
   barrierHealth?: number;
   selfCast?: boolean;
   length?: number;
-  groundSnapToPlayer?: boolean;
   sniperSight?: boolean;
 }
 
