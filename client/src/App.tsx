@@ -25,8 +25,13 @@ import { S2C, C2S } from 'shared/events';
 import { RANKS } from 'shared/leveling';
 import type { GameTickPayload, WizardClass } from './types/game.types';
 import { IS_LOCALHOST } from './utils/isLocalhost';
+import { getOrCreateClientId } from './utils/clientId';
 
-const WS_URL = import.meta.env.VITE_WS_URL ?? 'ws://localhost:8080';
+const WS_BASE_URL = import.meta.env.VITE_WS_URL ?? 'ws://localhost:8080';
+// Stable per-browser id sent on connect so the server can restore a
+// previous session's name/class/level/progress -- see
+// server/src/GameServer.js onConnection / _restoreAndGreet.
+const WS_URL = `${WS_BASE_URL}?clientId=${getOrCreateClientId()}`;
 
 const DENY_REASON_TEXT: Record<string, string> = {
   not_equipped: 'Spell not equipped',
@@ -74,7 +79,7 @@ export default function App() {
     setPhase, applyTick, setLocalClass, addKillFeedEntry, setLocalAlive, setLocalPosition, spawnDamageNumber,
     pushNotification, setVoteState, setLastDeath,
   } = useGameStore.getState();
-  const { setLocalPlayerId, setRoomId } = useNetworkStore.getState();
+  const { setLocalPlayerId, setRoomId, setRestoredUsername } = useNetworkStore.getState();
 
   useEffect(() => {
     const wsClient = ws.current;
@@ -84,10 +89,25 @@ export default function App() {
 
     const offJoined = wsClient.on(S2C.ROOM_JOINED, (msg) => {
       const playerId = msg.playerId as string;
+      const restoredClass = msg.class as WizardClass | null;
+      const restoredUsername = msg.username as string | null;
       setLocalPlayerId(playerId);
-      // Join the default lobby room
-      wsClient.send(C2S.JOIN_ROOM, { roomId: 'lobby', username: `Wizard_${playerId.slice(0, 4)}` });
-      setPhase('class_select');
+
+      if (restoredClass) {
+        // Resumed session (see server/src/GameServer.js _restoreAndGreet):
+        // same name/class/level/progress as before the disconnect -- join
+        // straight back into the arena instead of re-picking a class.
+        setLocalClass(restoredClass);
+        wsClient.send(C2S.JOIN_ROOM, { roomId: 'lobby' });
+        setPhase('playing');
+      } else {
+        // First-timer, or a returning player who disconnected before ever
+        // picking a class -- still show class_select, but pre-fill their
+        // saved name if the server had one on file.
+        if (restoredUsername) setRestoredUsername(restoredUsername);
+        wsClient.send(C2S.JOIN_ROOM, { roomId: 'lobby', username: restoredUsername ?? `Wizard_${playerId.slice(0, 4)}` });
+        setPhase('class_select');
+      }
     });
 
     const offRoomState = wsClient.on(S2C.ROOM_STATE, (msg) => {

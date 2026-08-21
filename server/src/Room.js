@@ -616,6 +616,7 @@ export class Room {
           rank: rankForLevel(killer.level).name,
           hatGrew: hatBuffTierForLevel(killer.level) > hatBuffTierForLevel(prevLevel),
         });
+        this.server.persistPlayer(killer);
       }
 
       // Bots can opt out of auto-spending skill points (Experiment Lab's

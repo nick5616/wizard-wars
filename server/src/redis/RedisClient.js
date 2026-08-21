@@ -29,7 +29,7 @@ export class RedisClient {
   }
 
   async set(key, value, ttlSeconds) {
-    if (!this.client?.status === 'ready') return;
+    if (this.client?.status !== 'ready') return;
     try {
       const json = JSON.stringify(value);
       if (ttlSeconds) {
@@ -41,7 +41,7 @@ export class RedisClient {
   }
 
   async get(key) {
-    if (!this.client?.status === 'ready') return null;
+    if (this.client?.status !== 'ready') return null;
     try {
       const raw = await this.client.get(key);
       return raw ? JSON.parse(raw) : null;

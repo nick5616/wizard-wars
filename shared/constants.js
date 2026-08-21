@@ -25,7 +25,7 @@ export const RESPAWN_DELAY = 8000; // ms -- safety-net auto-respawn for AFK play
 // Movement (Source engine-style ground/air acceleration -- see shared/movement.js)
 export const GROUND_ACCEL = 5.5; // Source sv_accelerate default
 export const AIR_ACCEL = 12; // Source sv_airaccelerate default -- combined with AIR_CAP_SPEED this is what enables bunny-hop strafe acceleration
-export const GROUND_FRICTION = 5.2; // Source sv_friction default
+export const GROUND_FRICTION = 9; // higher than Source's sv_friction default (4) -- stock value still felt like sliding on ice once real-world tick/frame jitter was layered on top
 export const STOP_SPEED = 2.5; // below this speed, friction decelerates as if at this speed so players actually stop instead of sliding forever (Source sv_stopspeed, scaled to BASE_MOVE_SPEED)
 export const AIR_CAP_SPEED = 1; // wishspeed clamp for air acceleration, scaled from Source's hardcoded 30ups air-strafe cap
 export const MAX_AIR_JUMPS = 1; // double jump: one extra jump usable mid-air, refreshed on landing

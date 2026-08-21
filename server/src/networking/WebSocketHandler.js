@@ -68,6 +68,15 @@ export class WebSocketHandler {
 
     if (msg.username) player.username = msg.username.slice(0, 20);
     room.addPlayer(player);
+
+    // Resumed session (class/progress restored from Redis on connect, see
+    // GameServer._restoreAndGreet): drop straight back into the arena
+    // instead of the class-select screen. Must NOT call selectClass() here
+    // -- that resets equippedSpells/divergedBranch to fresh-pick defaults
+    // and would undo exactly what was just restored.
+    if (player.class && !player.isAlive) {
+      room.spawnPlayer(player);
+    }
   }
 
   _leaveCurrentRoom(player) {
@@ -86,6 +95,7 @@ export class WebSocketHandler {
       player.username = msg.username.trim().slice(0, 20);
     }
     player.selectClass(msg.class);
+    this.server.persistPlayer(player);
 
     const room = player.roomId ? this.server.rooms.get(player.roomId) : null;
     if (room) {
@@ -144,6 +154,7 @@ export class WebSocketHandler {
 
     player.unlockedNodes.add(nodeId);
     player.skillPoints--;
+    this.server.persistPlayer(player);
 
     this.server.send(player, {
       type: 's2c:skill_bought',

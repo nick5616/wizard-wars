@@ -99,6 +99,37 @@ export class Player {
     this.isChoosingBranch = false;
   }
 
+  /** Subset of state worth surviving a disconnect -- see GameServer.persistPlayer. */
+  toPersisted() {
+    return {
+      username: this.username,
+      class: this.class,
+      level: this.level,
+      xp: this.xp,
+      skillPoints: this.skillPoints,
+      unlockedNodes: [...this.unlockedNodes],
+      divergedBranch: { ...this.divergedBranch },
+      equippedSpells: [...this.equippedSpells],
+      mobilitySpell: this.mobilitySpell,
+      kills: this.kills,
+    };
+  }
+
+  /** Restore a previous session's saved state onto this (freshly-connected) Player. */
+  restoreFrom(persisted) {
+    if (!persisted) return;
+    this.username = persisted.username ?? this.username;
+    this.class = persisted.class ?? null;
+    this.level = persisted.level ?? 1;
+    this.xp = persisted.xp ?? 0;
+    this.skillPoints = persisted.skillPoints ?? 0;
+    this.unlockedNodes = new Set(persisted.unlockedNodes ?? []);
+    this.divergedBranch = { ...(persisted.divergedBranch ?? {}) };
+    if (Array.isArray(persisted.equippedSpells)) this.equippedSpells = [...persisted.equippedSpells];
+    this.mobilitySpell = persisted.mobilitySpell ?? null;
+    this.kills = persisted.kills ?? 0;
+  }
+
   selectClass(className) {
     this.class = className;
     this.equippedSpells = [...DEFAULT_EQUIPPED[className]];

@@ -3,6 +3,8 @@ import { CLOCK_SYNC_INTERVAL } from "shared/constants";
 import { ClockSync } from "./ClockSync";
 import { useNetworkStore } from "../stores/networkStore";
 
+const JITTER_SAMPLE_WINDOW = 30; // last N inter-tick gaps used to compute jitter
+
 type MessageHandler = (msg: Record<string, unknown>) => void;
 
 export class WebSocketClient {
@@ -14,6 +16,8 @@ export class WebSocketClient {
     private reconnectDelay = 1000;
     private _destroyed = false;
     private _generation = 0;
+    private _lastTickArrival: number | null = null;
+    private _tickGaps: number[] = [];
 
     constructor(url: string, clockSync: ClockSync) {
         this.url = url;
@@ -108,6 +112,26 @@ export class WebSocketClient {
             );
             useNetworkStore.getState().setRtt(this.clockSync.rtt);
             return;
+        }
+
+        // Jitter: standard deviation of GAME_TICK inter-arrival gaps vs. the
+        // expected tick interval. A far more responsive/truthful "is the
+        // connection choppy right now" signal than the 5s clock-sync RTT
+        // samples -- and it doubles as a way to see server tick-scheduling
+        // jitter (see server/src/GameLoop.js) show up on the client.
+        if (type === S2C.GAME_TICK) {
+            const now = performance.now();
+            if (this._lastTickArrival !== null) {
+                this._tickGaps.push(now - this._lastTickArrival);
+                if (this._tickGaps.length > JITTER_SAMPLE_WINDOW) this._tickGaps.shift();
+            }
+            this._lastTickArrival = now;
+
+            if (this._tickGaps.length >= 4) {
+                const mean = this._tickGaps.reduce((a, b) => a + b, 0) / this._tickGaps.length;
+                const variance = this._tickGaps.reduce((a, b) => a + (b - mean) ** 2, 0) / this._tickGaps.length;
+                useNetworkStore.getState().setJitter(Math.sqrt(variance));
+            }
         }
 
         const handlers = this.handlers.get(type) ?? [];

@@ -1,7 +1,19 @@
 /**
- * Fixed-rate game loop using setImmediate for tight timing on Node.js.
- * Targets the given Hz rate; drifts are accumulated and caught up.
+ * Fixed-rate game loop targeting the given Hz rate; drifts are accumulated
+ * and caught up.
+ *
+ * Plain `setTimeout(fn, delay)` is subject to OS timer-resolution rounding
+ * (can be as coarse as ~15ms), which at a 64Hz (~15.6ms) tick rate produces
+ * visibly uneven real-world tick spacing -- ticks firing back-to-back or
+ * skipping a beat. That unevenness feeds straight through to GAME_TICK
+ * broadcast timestamps (client jitter stat, remote-entity interpolation).
+ * To get much tighter spacing without depending on OS-specific timer
+ * tricks, each wait is split into a coarse `setTimeout` for most of the
+ * remaining time and a short busy-wait tail (checking performance.now())
+ * for the last couple of milliseconds.
  */
+const SPIN_THRESHOLD_MS = 2; // switch from setTimeout to a busy-wait once this close to the deadline
+
 export class GameLoop {
   constructor(hz, onTick) {
     this.interval = 1000 / hz;
@@ -28,8 +40,17 @@ export class GameLoop {
 
   _schedule() {
     if (!this._running) return;
-    // Use setImmediate to yield, then check if enough time has passed
-    this._handle = setTimeout(() => this._tick(), 0);
+    const remaining = this.interval - this._accumulated;
+    const delay = Math.max(0, remaining - SPIN_THRESHOLD_MS);
+    this._handle = setTimeout(() => this._waitAndTick(), delay);
+  }
+
+  /** Busy-wait the last sliver of the interval for sub-millisecond precision, then tick. */
+  _waitAndTick() {
+    if (!this._running) return;
+    const deadline = this._lastTime + this.interval - this._accumulated;
+    while (performance.now() < deadline) { /* spin */ }
+    this._tick();
   }
 
   _tick() {
@@ -53,7 +74,6 @@ export class GameLoop {
     }
 
     // Schedule next tick
-    const delay = Math.max(0, this.interval - this._accumulated);
-    this._handle = setTimeout(() => this._tick(), delay);
+    this._schedule();
   }
 }

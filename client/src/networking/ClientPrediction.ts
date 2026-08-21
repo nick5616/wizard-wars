@@ -155,6 +155,11 @@ export class ClientPrediction {
     const dz = corrected.z - visual.z;
     const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
+    // Dead-zone: ordinary floating-point/timing noise still produces a
+    // tiny nonzero error every tick even when prediction and server agree,
+    // which without this reads as a constant low-level vibration ("ice").
+    if (dist < 0.02) return visual;
+
     // Snap if too far off (teleport / extreme desync)
     if (dist > 5) return corrected;
 

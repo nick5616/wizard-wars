@@ -16,7 +16,7 @@ import type { Vec3, CastInput } from '../../types/game.types';
 import { INPUT_FLAGS } from 'shared/events';
 import type { WebSocketClient } from '../../networking/WebSocketClient';
 import { C2S } from 'shared/events';
-import { PLAYER_HEIGHT, CAST_MAX_RANGE, ARENA_RADIUS } from 'shared/constants';
+import { PLAYER_HEIGHT, CAST_MAX_RANGE, ARENA_RADIUS, TICK_RATE } from 'shared/constants';
 import { MOBILITY_SPELL, BASIC_ATTACK, MELEE_ATTACK, getSpell } from 'shared/spells';
 import { getTargetObjects } from '../../networking/targetRegistry';
 import { audioManager } from '../../audio/AudioManager';
@@ -24,6 +24,16 @@ import { localOrientation } from '../../networking/localOrientation';
 import { terrainRaycastBlocked } from 'shared/mapLayout';
 
 const MOUSE_SENSITIVITY = 0.002;
+
+// Movement is integrated in fixed steps (matching the server's tick rate)
+// instead of once per rendered frame with that frame's raw variable delta --
+// requestAnimationFrame timing isn't perfectly even (GC pauses, compositor
+// hitches, background-tab throttling), and feeding that unevenness straight
+// into position integration is what made walking feel jittery/"icy" even
+// with a healthy connection. Capped backlog so a stall (alt-tab, a long
+// hitch) can't spiral into simulating a burst of catch-up steps at once.
+const MOVE_STEP = 1 / TICK_RATE;
+const MAX_MOVE_SUBSTEPS = 8;
 
 /** Walk up from a raycast hit to find the registered player group and its tagged id. */
 function resolvePlayerIdFromHit(obj: THREE.Object3D | null): string | undefined {
@@ -54,6 +64,7 @@ export function CameraController({ ws, prediction }: Props) {
   const wasJumpDownRef = useRef(false);
   const pendingJumpEdgeRef = useRef(false); // sticky until the next throttled network send consumes it, so a fast press can't fall between two 64Hz sends and never reach the server
   const inputTickRef = useRef(0);
+  const moveAccumRef = useRef(0); // fixed-step movement integration backlog, see useFrame below
   const lastCastRef = useRef(false);
   const lastBasicAttackRef = useRef(false);
   const raycasterRef = useRef(new THREE.Raycaster());
@@ -132,6 +143,7 @@ export function CameraController({ ws, prediction }: Props) {
       posRef.current = { ...local.position };
       velRef.current = { x: 0, y: 0, z: 0 };
       airJumpsUsedRef.current = 0;
+      moveAccumRef.current = 0;
     }
     wasAliveRef.current = local.isAlive;
 
@@ -179,7 +191,13 @@ export function CameraController({ ws, prediction }: Props) {
     const barrierCircles = Object.values(useGameStore.getState().barriers)
       .filter((b) => b.active)
       .map((b) => ({ x: b.position.x, z: b.position.z, radius: b.width / 2 }));
-    const result = prediction.predict(posRef.current, velRef.current, flags, yawRef.current, dt, barrierCircles, airJumpsUsedRef.current);
+
+    moveAccumRef.current = Math.min(moveAccumRef.current + dt, MOVE_STEP * MAX_MOVE_SUBSTEPS);
+    let result = { pos: posRef.current, vel: velRef.current, airJumpsUsed: airJumpsUsedRef.current };
+    while (moveAccumRef.current >= MOVE_STEP) {
+      moveAccumRef.current -= MOVE_STEP;
+      result = prediction.predict(result.pos, result.vel, flags, yawRef.current, MOVE_STEP, barrierCircles, result.airJumpsUsed);
+    }
     posRef.current = result.pos;
     velRef.current = result.vel;
     airJumpsUsedRef.current = result.airJumpsUsed;

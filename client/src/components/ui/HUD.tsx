@@ -1,5 +1,4 @@
 import { useGameStore } from '../../stores/gameStore';
-import { useNetworkStore } from '../../stores/networkStore';
 import { classFlavor } from 'shared/classFlavor';
 import { Crosshair } from './Crosshair';
 import { HealthBar } from './HealthBar';
@@ -8,11 +7,11 @@ import { SpellBar } from './SpellBar';
 import { KillFeed } from './KillFeed';
 import { CombatLogHUD } from './CombatLog';
 import { DomainBanner } from './DomainBanner';
+import { NetworkStats } from './NetworkStats';
 import type { WebSocketClient } from '../../networking/WebSocketClient';
 
 export function HUD({ ws }: { ws: WebSocketClient }) {
   const { local, phase } = useGameStore();
-  const { rtt } = useNetworkStore();
 
   if (phase !== 'playing') return null;
 
@@ -25,6 +24,7 @@ export function HUD({ ws }: { ws: WebSocketClient }) {
       <KillFeed />
       <CombatLogHUD ws={ws} />
       <DomainBanner />
+      <NetworkStats />
 
       {/* Kill count */}
       <div style={{
@@ -38,7 +38,6 @@ export function HUD({ ws }: { ws: WebSocketClient }) {
         letterSpacing: 1,
       }}>
         <div>K {local.kills}</div>
-        <div style={{ color: '#888', fontSize: 12, marginTop: 2 }}>{rtt}ms</div>
       </div>
 
       {/* Fire Solar Flare: brief blind flash when hit by a caster with the passive */}
