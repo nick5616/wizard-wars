@@ -240,7 +240,7 @@ function PointSpendPrompt({ voteState, onChoose }: { voteState: VoteState; onCho
     <div style={{
       position: 'fixed',
       left: 20,
-      bottom: 20,
+      bottom: 178, // sits just above the HP/Level/Mana well cluster (see StatusWells)
       width: 300,
       zIndex: 160,
       fontFamily: "'Courier New', monospace",

@@ -44,6 +44,11 @@ export class SpellSystem {
       return this._deny(player, spellId, 'on_cooldown', player.getCooldownRemaining(spellId));
     }
 
+    // Check mana
+    if (!isAbyssFreeCast && !player.isDebugMode && spell.manaCost > 0 && !player.hasMana(spell.manaCost)) {
+      return this._deny(player, spellId, 'not_enough_mana');
+    }
+
     // Domain: only one active at a time globally
     if (spell.type === 'domain' && this.room.getActiveDomain()) {
       return this._deny(player, spellId, 'domain_active');
@@ -91,6 +96,7 @@ export class SpellSystem {
       player.hasAbyssFreeCast = false;
     } else if (!player.isDebugMode) {
       player.setCooldown(spellId, spell.cooldown);
+      if (spell.manaCost > 0) player.spendMana(spell.manaCost);
     }
 
     // Notify caster of confirmed cast (cooldown starts now, even for windup spells)

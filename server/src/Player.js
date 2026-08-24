@@ -1,6 +1,7 @@
 import { PLAYER_MAX_HEALTH, BASE_MOVE_SPEED, PLAYER_HEIGHT, RESPAWN_DELAY, DEATH_NOTE_DAMAGE_WINDOW } from 'shared/constants';
 import { DEFAULT_EQUIPPED, MOBILITY_SPELL, MAX_SPELL_SLOTS } from 'shared/spells';
 import { STATUS_EFFECTS } from 'shared/gameConfig';
+import { maxManaFor, manaRegenFor } from 'shared/leveling';
 
 export class Player {
   constructor({ id, ws, username }) {
@@ -16,6 +17,8 @@ export class Player {
     this.isAlive = false;
     this.health = PLAYER_MAX_HEALTH;
     this.maxHealth = PLAYER_MAX_HEALTH;
+    this.mana = 0;
+    this.maxMana = 0;
     this.skillPoints = 0;
     this.xp = 0;
     this.level = 1;
@@ -139,11 +142,33 @@ export class Player {
     for (const spellId of this.equippedSpells) {
       if (spellId) this.unlockedNodes.add(spellId);
     }
+    this.maxMana = maxManaFor(this.class, this.level);
+    this.mana = this.maxMana;
+  }
+
+  /** Recompute mana capacity for the current class/level -- called on level up. Capacity only grows, so this never costs the player mana. */
+  recalcMana() {
+    this.maxMana = maxManaFor(this.class, this.level);
+    this.mana = Math.min(this.mana, this.maxMana);
+  }
+
+  regenMana(dt) {
+    if (!this.class) return;
+    this.mana = Math.min(this.maxMana, this.mana + manaRegenFor(this.class, this.level) * dt);
+  }
+
+  hasMana(cost) {
+    return this.mana >= cost;
+  }
+
+  spendMana(cost) {
+    this.mana = Math.max(0, this.mana - cost);
   }
 
   spawn(position) {
     this.isAlive = true;
     this.health = this.maxHealth;
+    this.mana = this.maxMana;
     this.position = { ...position };
     this.velocity = { x: 0, y: 0, z: 0 };
     this.airJumpsUsed = 0;
@@ -264,6 +289,8 @@ export class Player {
       isAlive: this.isAlive,
       health: this.health,
       maxHealth: this.maxHealth,
+      mana: Math.round(this.mana),
+      maxMana: this.maxMana,
       position: this.position,
       yaw: this.yaw,
       pitch: this.pitch,

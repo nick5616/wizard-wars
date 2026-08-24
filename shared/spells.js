@@ -6,7 +6,22 @@
 // spell.type values:
 // projectile | beam | hitscan | aoe | domain | direct | passive | mobility | melee
 
-const def = (d) => ({ serverAuthoritative: true, interruptible: false, windupMs: 0, statusEffect: null, statusDuration: 0, selfCost: null, requiresTarget: false, radius: 0, duration: null, speed: null, ...d });
+// Default mana cost by tier -- keeps ~90 spells from needing a hand-tuned
+// number each. Index = spell tier, clamped to the top band for anything
+// higher (the tier-11 earth ultimate, etc). Individual spells can still
+// override by passing their own manaCost.
+const MANA_BY_TIER = [0, 10, 16, 22, 28, 34, 40, 50, 58, 65, 70, 75];
+const manaForTier = (tier) => MANA_BY_TIER[Math.min(tier ?? 1, MANA_BY_TIER.length - 1)] ?? 20;
+
+const def = (d) => ({
+  serverAuthoritative: true, interruptible: false, windupMs: 0, statusEffect: null, statusDuration: 0,
+  selfCost: null, requiresTarget: false, radius: 0, duration: null, speed: null,
+  // Mobility lives outside the 4-slot economy already (triggered by Shift,
+  // never equipped) -- same treatment as basic attack/melee (tier 0, so they
+  // fall out to 0 mana naturally below), it doesn't draw from mana either.
+  manaCost: d.type === 'mobility' ? 0 : manaForTier(d.tier),
+  ...d,
+});
 
 // ─── FIRE ──────────────────────────────────────────────────────────────────
 

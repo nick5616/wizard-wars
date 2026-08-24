@@ -84,3 +84,24 @@ export function hatBuffTierForLevel(level) {
 
 export const HAT_BUFF_DAMAGE_MULT = { 1: 0.05, 2: 0.12, 3: 0.20 };
 export const HAT_BUFF_DURATION_MS = { 1: 6000, 2: 8000, 3: 10000 };
+
+// ── Mana ─────────────────────────────────────────────────────────────────
+// Capacity and regen both grow with level and vary by class. Ranged/status
+// casters (ice, dark) lean on bigger pools; sword barely uses mana at all
+// (its kit is mostly cheap tier-1/2 spells) so it gets the smallest pool but
+// the fastest regen relative to its size -- it was never meant to be
+// mana-gated the way the other four are.
+const MANA_BASE = { fire: 90, ice: 120, dark: 130, sword: 60, earth: 100 };
+const MANA_REGEN_BASE = { fire: 11, ice: 13, dark: 12, sword: 10, earth: 10 }; // per second
+const MANA_PER_LEVEL = 7;
+const MANA_REGEN_PER_LEVEL = 0.5;
+
+export function maxManaFor(wizardClass, level) {
+  const base = MANA_BASE[wizardClass] ?? 100;
+  return Math.round(base + MANA_PER_LEVEL * Math.max(0, level - 1));
+}
+
+export function manaRegenFor(wizardClass, level) {
+  const base = MANA_REGEN_BASE[wizardClass] ?? 11;
+  return base + MANA_REGEN_PER_LEVEL * Math.max(0, level - 1);
+}

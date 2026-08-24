@@ -24,7 +24,7 @@ export function SpellBar() {
       left: '50%',
       transform: 'translateX(-50%)',
       display: 'flex',
-      gap: 10,
+      gap: 12,
       alignItems: 'flex-end',
       pointerEvents: 'none',
       zIndex: 100,
@@ -43,8 +43,8 @@ export function SpellBar() {
           slotLabel="⇧"
           cooldownSec={mobilityCD / 1000}
           cooldownPct={mobilitySpell ? (mobilityCD / 1000) / mobilitySpell.cooldown : 0}
-          width={68}
-          height={88}
+          width={82}
+          height={106}
         />
       </div>
 

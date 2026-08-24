@@ -2,9 +2,8 @@ import { useNetworkStore } from '../../stores/networkStore';
 
 /**
  * CS2-style net-graph corner readout: ping (RTT) and jitter (GAME_TICK
- * inter-arrival variance, see WebSocketClient._dispatch). Stays hidden on a
- * healthy connection -- only appears once one of the two crosses into
- * "notice this" territory, and escalates color at a second, worse threshold.
+ * inter-arrival variance, see WebSocketClient._dispatch). Always visible;
+ * escalates color once a value crosses into "notice this" territory.
  */
 const PING_WARN = 100, PING_BAD = 200;
 const JITTER_WARN = 10, JITTER_BAD = 25;
@@ -17,10 +16,6 @@ function statColor(value: number, warn: number, bad: number) {
 
 export function NetworkStats() {
   const { rtt, jitter } = useNetworkStore();
-
-  const pingHigh = rtt >= PING_WARN;
-  const jitterHigh = jitter >= JITTER_WARN;
-  if (!pingHigh && !jitterHigh) return null;
 
   return (
     <div style={{

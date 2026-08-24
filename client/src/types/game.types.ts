@@ -12,6 +12,7 @@ export interface SpellDef {
   type: SpellType;
   damage: number;
   cooldown: number;
+  manaCost: number;
   speed: number | null;
   radius: number;
   duration: number | null;
@@ -40,6 +41,8 @@ export interface PlayerState {
   isAlive: boolean;
   health: number;
   maxHealth: number;
+  mana: number;
+  maxMana: number;
   position: Vec3;
   yaw: number;
   pitch: number;

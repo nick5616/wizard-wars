@@ -6,8 +6,11 @@ import type {
 import { MAX_SPELL_SLOTS } from 'shared/spells';
 
 interface LocalPlayerState {
+  username: string;
   health: number;
   maxHealth: number;
+  mana: number;
+  maxMana: number;
   class: WizardClass | null;
   equippedSpells: (string | null)[];
   activeSlot: number;
@@ -123,8 +126,11 @@ interface GameState {
 }
 
 const defaultLocal: LocalPlayerState = {
+  username: '',
   health: 200,
   maxHealth: 200,
+  mana: 100,
+  maxMana: 100,
   class: null,
   equippedSpells: Array(MAX_SPELL_SLOTS).fill(null),
   activeSlot: 0,
@@ -176,8 +182,11 @@ export const useGameStore = create<GameState>((set, get) => ({
       lastServerTimestamp: ts,
       local: localPlayer ? {
         ...s.local,
+        username: localPlayer.username,
         health: localPlayer.health,
         maxHealth: localPlayer.maxHealth,
+        mana: localPlayer.mana,
+        maxMana: localPlayer.maxMana,
         class: localPlayer.class,
         equippedSpells: localPlayer.equippedSpells,
         cooldowns: localPlayer.cooldowns,

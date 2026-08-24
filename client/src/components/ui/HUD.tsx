@@ -1,8 +1,6 @@
 import { useGameStore } from '../../stores/gameStore';
-import { classFlavor } from 'shared/classFlavor';
 import { Crosshair } from './Crosshair';
-import { HealthBar } from './HealthBar';
-import { ExpBar } from './ExpBar';
+import { StatusWells } from './StatusWells';
 import { SpellBar } from './SpellBar';
 import { KillFeed } from './KillFeed';
 import { CombatLogHUD } from './CombatLog';
@@ -18,8 +16,7 @@ export function HUD({ ws }: { ws: WebSocketClient }) {
   return (
     <>
       <Crosshair />
-      <ExpBar />
-      <HealthBar />
+      <StatusWells />
       <SpellBar />
       <KillFeed />
       <CombatLogHUD ws={ws} />
@@ -42,31 +39,6 @@ export function HUD({ ws }: { ws: WebSocketClient }) {
 
       {/* Fire Solar Flare: brief blind flash when hit by a caster with the passive */}
       <BlindFlash />
-
-      {/* Class badge — symbol/title evolve once you commit to a skill tree fork */}
-      {local.class && (() => {
-        const flavor = classFlavor(local.class, local.divergedBranch);
-        return (
-          <div style={{
-            position: 'fixed',
-            top: 12,
-            right: 12,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            fontSize: 13,
-            color: '#aaa',
-            textTransform: 'uppercase',
-            letterSpacing: 3,
-            pointerEvents: 'none',
-            zIndex: 100,
-          }}>
-            <span style={{ fontSize: 15 }}>{flavor.symbol}</span>
-            <span>{flavor.title}</span>
-          </div>
-        );
-      })()}
-
     </>
   );
 }

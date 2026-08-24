@@ -39,6 +39,7 @@ const DENY_REASON_TEXT: Record<string, string> = {
   not_alive: "Can't cast while dead",
   wrong_class: 'Wrong class for that spell',
   on_cooldown: 'Still on cooldown',
+  not_enough_mana: 'Not enough mana',
   domain_active: 'Another domain is already active',
   used_this_life: 'Already used this life',
   no_recent_damage: 'No recent damage on target',

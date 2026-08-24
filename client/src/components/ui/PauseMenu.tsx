@@ -1,12 +1,13 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useGameStore } from '../../stores/gameStore';
 import { useNetworkStore } from '../../stores/networkStore';
 import { getSpell, MOBILITY_SPELL, MAX_SPELL_SLOTS, isEquippableSpell } from 'shared/spells';
 import type { WebSocketClient } from '../../networking/WebSocketClient';
-import type { WizardClass } from '../../types/game.types';
+import type { SpellDef, WizardClass } from '../../types/game.types';
 import { UIButton } from './UIButton';
 import { SpellTypeIcon, iconKindForSpellId } from './SpellTypeIcon';
 import { SpellCard } from './SpellCard';
+import { WizardPreview } from './WizardPreview';
 import { C2S } from 'shared/events';
 
 const CLASS_COLORS: Record<WizardClass, string> = {
@@ -138,53 +139,43 @@ export function PauseMenu({ ws, onClose, experimentLabAvailable, onOpenExperimen
     .map(id => ({ id, ...SKILL_DESCRIPTIONS[id] }))
     .filter(n => n.label);
 
+  // Preview's wand gem tracks the currently-selected hotbar slot, same
+  // convention as the in-world model (see WizardPreview.tsx) -- also the
+  // intended hook point for future spell-driven cosmetics.
+  const activeSpellId = local.equippedSpells[local.activeSlot] ?? null;
+  const gemColor = (activeSpellId ? getSpell(activeSpellId)?.color : null) ?? classColor;
+
   return (
     <div
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'rgba(2,2,8,0.92)',
+        background: '#050508',
         display: 'flex',
         flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
         zIndex: 500,
         fontFamily: "'Courier New', monospace",
       }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) {
-          onClose();
-          const canvas = document.querySelector('canvas');
-          if (canvas) setTimeout(() => { if (!document.pointerLockElement) canvas.requestPointerLock(); }, 50);
-        }
-      }}
     >
+      {/* Header */}
       <div style={{
-        width: 540,
-        maxHeight: '80vh',
+        padding: '20px 32px 16px',
+        borderBottom: '1px solid #252535',
         display: 'flex',
-        flexDirection: 'column',
-        background: 'rgba(8,8,20,0.98)',
-        border: `1px solid ${classColor}44`,
-        borderRadius: 6,
-        overflow: 'hidden',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexShrink: 0,
       }}>
-        {/* Header */}
-        <div style={{
-          padding: '18px 24px 12px',
-          borderBottom: '1px solid #252535',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-        }}>
-          <div>
-            <div style={{ color: classColor, fontSize: 11, letterSpacing: 5, textTransform: 'uppercase', marginBottom: 2 }}>
-              {wizardClass ?? 'Wizard'} — Paused
-            </div>
-            <div style={{ color: '#aaa', fontSize: 11, letterSpacing: 2 }}>
-              {local.kills} kill{local.kills !== 1 ? 's' : ''} · {local.skillPoints} skill point{local.skillPoints !== 1 ? 's' : ''} available
-            </div>
+        <div>
+          <div style={{ color: classColor, fontSize: 13, letterSpacing: 6, textTransform: 'uppercase', marginBottom: 3 }}>
+            {wizardClass ?? 'Wizard'} — Paused
           </div>
+          <div style={{ color: '#aaa', fontSize: 11, letterSpacing: 2 }}>
+            {local.kills} kill{local.kills !== 1 ? 's' : ''} · {local.skillPoints} skill point{local.skillPoints !== 1 ? 's' : ''} available
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <div style={{ color: '#666', fontSize: 10, letterSpacing: 1 }}>Press Escape to resume</div>
           <UIButton
             onClick={onClose}
             locksPointer
@@ -194,7 +185,7 @@ export function PauseMenu({ ws, onClose, experimentLabAvailable, onOpenExperimen
               borderRadius: 3,
               color: '#ccc',
               fontSize: 11,
-              padding: '4px 10px',
+              padding: '5px 12px',
               cursor: 'pointer',
               letterSpacing: 2,
             }}
@@ -202,36 +193,37 @@ export function PauseMenu({ ws, onClose, experimentLabAvailable, onOpenExperimen
             ESC
           </UIButton>
         </div>
+      </div>
 
-        {/* Tabs */}
-        <div style={{ display: 'flex', borderBottom: '1px solid #252535' }}>
-          {(['spells', 'glossary', 'settings'] as Tab[]).map(t => (
-            <UIButton
-              key={t}
-              onClick={() => setTab(t)}
-              style={{
-                flex: 1,
-                background: 'none',
-                border: 'none',
-                borderBottom: tab === t ? `2px solid ${classColor}` : '2px solid transparent',
-                color: tab === t ? classColor : '#aaa',
-                fontSize: 11,
-                letterSpacing: 3,
-                padding: '10px 0',
-                cursor: 'pointer',
-                textTransform: 'uppercase',
-                transition: 'color 0.15s',
-              }}
-            >
-              {t}
-            </UIButton>
-          ))}
-        </div>
+      {/* Tabs */}
+      <div style={{ display: 'flex', borderBottom: '1px solid #252535', padding: '0 32px', flexShrink: 0 }}>
+        {(['spells', 'glossary', 'settings'] as Tab[]).map(t => (
+          <UIButton
+            key={t}
+            onClick={() => setTab(t)}
+            style={{
+              background: 'none',
+              border: 'none',
+              borderBottom: tab === t ? `2px solid ${classColor}` : '2px solid transparent',
+              color: tab === t ? classColor : '#aaa',
+              fontSize: 11,
+              letterSpacing: 3,
+              padding: '12px 22px',
+              cursor: 'pointer',
+              textTransform: 'uppercase',
+              transition: 'color 0.15s',
+            }}
+          >
+            {t}
+          </UIButton>
+        ))}
+      </div>
 
-        {/* Content */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }}>
+      {/* Body: tab content (left) + wizard preview (right) */}
+      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+        <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '26px 32px 40px' }}>
           {tab === 'spells' && (
-            <SpellsTab local={local} mobilitySpell={mobilitySpell} classColor={classColor} ws={ws} />
+            <SpellsTab local={local} mobilitySpell={mobilitySpell} mobilitySpellId={mobilitySpellId} classColor={classColor} ws={ws} />
           )}
           {tab === 'glossary' && (
             <GlossaryTab unlockedList={unlockedList} classColor={classColor} />
@@ -246,10 +238,29 @@ export function PauseMenu({ ws, onClose, experimentLabAvailable, onOpenExperimen
             />
           )}
         </div>
-      </div>
 
-      <div style={{ color: '#888', fontSize: 11, letterSpacing: 2, marginTop: 14 }}>
-        Press Escape or click outside to resume
+        {/* Wizard preview panel -- also where future cosmetic changes tied to
+            equipped spells will show up. */}
+        <div style={{
+          width: 360,
+          flexShrink: 0,
+          borderLeft: '1px solid #252535',
+          background: 'linear-gradient(180deg, rgba(255,255,255,0.02) 0%, rgba(0,0,0,0.15) 100%)',
+          display: 'flex',
+          flexDirection: 'column',
+        }}>
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <WizardPreview color={classColor} level={local.level} gemColor={gemColor} />
+          </div>
+          <div style={{ padding: '14px 20px 26px', borderTop: '1px solid #1c1c2c', textAlign: 'center', flexShrink: 0 }}>
+            {local.username && (
+              <div style={{ color: '#ddd', fontSize: 13, letterSpacing: 1, marginBottom: 3 }}>{local.username}</div>
+            )}
+            <div style={{ color: classColor, fontSize: 10, letterSpacing: 2, textTransform: 'uppercase' }}>
+              {wizardClass ?? 'Wizard'} · Level {local.level}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -264,13 +275,27 @@ interface LocalLike {
   cooldowns: Record<string, number>;
 }
 
-function SpellsTab({ local, mobilitySpell, classColor, ws }: {
+const SECTION_HEADER_STYLE = { color: '#aaa', fontSize: 10, letterSpacing: 3, textTransform: 'uppercase' as const, marginBottom: 14 };
+const SLOT_KEY_LABEL_STYLE = { fontSize: 10, letterSpacing: 2, color: '#888', marginBottom: 6, textTransform: 'uppercase' as const };
+
+interface FlyingState {
+  spellId: string;
+  spell: SpellDef;
+  from: DOMRect;
+  to: DOMRect;
+}
+
+function SpellsTab({ local, mobilitySpell, mobilitySpellId, classColor, ws }: {
   local: LocalLike;
   mobilitySpell: ReturnType<typeof getSpell>;
+  mobilitySpellId: string | null;
   classColor: string;
   ws: WebSocketClient;
 }) {
   const [selectedSlot, setSelectedSlot] = useState(0);
+  const [flying, setFlying] = useState<FlyingState | null>(null);
+  const slotRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   const equippableIds = local.unlockedNodes.filter(id => {
     const s = getSpell(id);
@@ -283,37 +308,70 @@ function SpellsTab({ local, mobilitySpell, classColor, ws }: {
     ws.send(C2S.EQUIP_SPELL, { slotIndex: selectedSlot, spellId });
   }
 
+  // Click a card in the grid below: kick off the equip immediately (the real
+  // slot updates whenever the next server tick lands) and, cosmetically, fly
+  // a clone of the card from its grid position over to the target slot.
+  function onGridCardClick(spellId: string) {
+    const spell = getSpell(spellId);
+    if (!spell) return;
+    const fromEl = cardRefs.current.get(spellId);
+    const toEl = slotRefs.current[selectedSlot];
+    if (fromEl && toEl) {
+      setFlying({ spellId, spell, from: fromEl.getBoundingClientRect(), to: toEl.getBoundingClientRect() });
+    }
+    equipSpell(spellId);
+  }
+
   // Slot keys read 1-9 then 0, matching the "1234567890" top-row layout.
   const slotLabel = (i: number) => (i < 9 ? i + 1 : 0);
 
   return (
     <div>
-      {/* Slot selector */}
-      <div style={{ color: '#aaa', fontSize: 10, letterSpacing: 3, textTransform: 'uppercase', marginBottom: 10 }}>
-        Spell Slots — click to select
-      </div>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 6, overflowX: 'auto', paddingBottom: 4 }}>
+      {/* Hotbar -- a live rendering of the actual HUD spell bar (see SpellBar.tsx).
+          Click a slot to select it, then click a spell below to equip it there. */}
+      <div style={SECTION_HEADER_STYLE}>Your hotbar — click a slot to select it</div>
+      <div style={{ display: 'flex', gap: 14, marginBottom: 18, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+          <div style={SLOT_KEY_LABEL_STYLE}>Shift</div>
+          <SpellCard
+            spellId={mobilitySpellId}
+            spell={mobilitySpell}
+            slotLabel="⇧"
+            cooldownSec={0}
+            cooldownPct={0}
+            width={82}
+            height={106}
+          />
+          {mobilitySpell && (
+            <div style={{ color: '#666', fontSize: 9, marginTop: 6, letterSpacing: 1 }}>{mobilitySpell.cooldown}s cd · mobility</div>
+          )}
+        </div>
+
+        <div style={{ width: 1, alignSelf: 'stretch', background: '#252535', margin: '0 2px 16px' }} />
+
         {local.equippedSpells.slice(0, visibleSlots).map((spellId, i) => {
           const spell = spellId ? getSpell(spellId) : null;
           return (
-            <SpellCard
-              key={i}
-              spellId={spellId}
-              spell={spell}
-              slotLabel={String(slotLabel(i))}
-              cooldownSec={0}
-              cooldownPct={0}
-              active={selectedSlot === i}
-              onClick={() => setSelectedSlot(i)}
-              width={64}
-              height={82}
-            />
+            <div key={i} ref={(el) => { slotRefs.current[i] = el; }} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+              <div style={{ ...SLOT_KEY_LABEL_STYLE, color: selectedSlot === i ? classColor : '#888' }}>{slotLabel(i)}</div>
+              <SpellCard
+                spellId={spellId}
+                spell={spell}
+                slotLabel={String(slotLabel(i))}
+                cooldownSec={0}
+                cooldownPct={0}
+                active={selectedSlot === i}
+                onClick={() => setSelectedSlot(i)}
+                width={92}
+                height={120}
+              />
+            </div>
           );
         })}
       </div>
 
       {/* Unequip button */}
-      {local.equippedSpells[selectedSlot] && (
+      {local.equippedSpells[selectedSlot] ? (
         <UIButton
           onClick={() => equipSpell(null)}
           style={{
@@ -325,36 +383,18 @@ function SpellsTab({ local, mobilitySpell, classColor, ws }: {
             fontSize: 10,
             letterSpacing: 2,
             cursor: 'pointer',
-            marginBottom: 18,
+            marginBottom: 26,
             textTransform: 'uppercase',
           }}
         >
           Clear slot {slotLabel(selectedSlot)}
         </UIButton>
+      ) : (
+        <div style={{ marginBottom: 26 }} />
       )}
-      {!local.equippedSpells[selectedSlot] && <div style={{ marginBottom: 18 }} />}
 
-      {/* Mobility slot (display only) */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderBottom: '1px solid #1c1c2c', marginBottom: 16 }}>
-        <div style={{ width: 28, height: 28, borderRadius: 3, background: mobilitySpell ? `${mobilitySpell.color}22` : '#0a0a14', border: `1px solid ${mobilitySpell ? mobilitySpell.color + '55' : '#333'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, color: '#aaa', flexShrink: 0 }}>⇧</div>
-        {mobilitySpell ? (
-          <div style={{ flex: 1 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
-              <div style={{ width: 7, height: 7, borderRadius: '50%', background: mobilitySpell.color }} />
-              <div style={{ color: '#eee', fontSize: 12 }}>{mobilitySpell.name}</div>
-              <div style={{ color: '#666', fontSize: 9, textTransform: 'uppercase', letterSpacing: 1 }}>mobility · Shift</div>
-            </div>
-            <div style={{ color: '#888', fontSize: 10 }}>{mobilitySpell.cooldown}s cooldown</div>
-          </div>
-        ) : (
-          <div style={{ color: '#888', fontSize: 12, fontStyle: 'italic' }}>No mobility spell</div>
-        )}
-      </div>
-
-      {/* Unlocked spells list */}
-      <div style={{ color: '#aaa', fontSize: 10, letterSpacing: 3, textTransform: 'uppercase', marginBottom: 10 }}>
-        Unlocked Spells — click to equip into slot {slotLabel(selectedSlot)}
-      </div>
+      {/* Unlocked spells grid */}
+      <div style={SECTION_HEADER_STYLE}>Unlocked spells — click to equip into slot {slotLabel(selectedSlot)}</div>
 
       {equippableIds.length === 0 ? (
         <div style={{ color: '#888', fontSize: 12, fontStyle: 'italic', lineHeight: 1.6 }}>
@@ -362,54 +402,98 @@ function SpellsTab({ local, mobilitySpell, classColor, ws }: {
           <span style={{ fontSize: 11 }}>Open the Skill Tree (Tab) and spend skill points.</span>
         </div>
       ) : (
-        equippableIds.map(id => {
-          const spell = getSpell(id);
-          if (!spell) return null;
-          const equippedInSlot = local.equippedSpells.indexOf(id);
-          const isEquipped = equippedInSlot !== -1;
-          const isInSelectedSlot = equippedInSlot === selectedSlot;
-          return (
-            <UIButton
-              key={id}
-              onClick={() => equipSpell(id)}
-              style={{
-                width: '100%',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                padding: '9px 0',
-                background: 'none',
-                border: 'none',
-                borderBottom: '1px solid #1c1c2c',
-                cursor: 'pointer',
-                textAlign: 'left',
-                opacity: isInSelectedSlot ? 0.5 : 1,
-              }}
-            >
-              <div style={{ width: 8, height: 8, borderRadius: '50%', background: spell.color, flexShrink: 0, boxShadow: `0 0 4px ${spell.glowColor}` }} />
-              <div style={{ flex: 1 }}>
-                <div style={{ color: isEquipped ? classColor : '#ddd', fontSize: 12, marginBottom: 2 }}>
-                  {spell.name}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(104px, 1fr))', gap: '22px 18px' }}>
+          {equippableIds.map(id => {
+            const spell = getSpell(id);
+            if (!spell) return null;
+            const equippedInSlot = local.equippedSpells.indexOf(id);
+            const isEquipped = equippedInSlot !== -1;
+            const isInSelectedSlot = equippedInSlot === selectedSlot;
+            return (
+              <div
+                key={id}
+                ref={(el) => { if (el) cardRefs.current.set(id, el); else cardRefs.current.delete(id); }}
+                style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', opacity: isInSelectedSlot ? 0.45 : 1 }}
+              >
+                <SpellCard
+                  spellId={id}
+                  spell={spell}
+                  slotLabel=""
+                  cooldownSec={0}
+                  cooldownPct={0}
+                  onClick={() => onGridCardClick(id)}
+                  width={104}
+                  height={136}
+                />
+                <div style={{ marginTop: 7, textAlign: 'center' }}>
+                  <div style={{ color: '#777', fontSize: 10 }}>
+                    {spell.damage > 0 && <span style={{ marginRight: 8 }}>{spell.damage} dmg</span>}
+                    {spell.cooldown > 0 && <span>{spell.cooldown}s cd</span>}
+                  </div>
+                  {spell.statusEffect && <div style={{ color: '#aa88ff', fontSize: 9, marginTop: 1 }}>+{spell.statusEffect}</div>}
                   {isEquipped && (
-                    <span style={{ color: classColor, fontSize: 9, marginLeft: 8, letterSpacing: 1 }}>
-                      ✓ slot {equippedInSlot + 1}
-                    </span>
+                    <div style={{ color: classColor, fontSize: 9, letterSpacing: 1, marginTop: 3 }}>
+                      ✓ slot {equippedInSlot < 9 ? equippedInSlot + 1 : 0}
+                    </div>
                   )}
                 </div>
-                <div style={{ color: '#777', fontSize: 10 }}>
-                  {spell.damage > 0 && <span style={{ marginRight: 10 }}>{spell.damage} dmg</span>}
-                  {spell.cooldown > 0 && <span style={{ marginRight: 10 }}>{spell.cooldown}s cd</span>}
-                  {spell.statusEffect && <span style={{ color: '#aa88ff' }}>+{spell.statusEffect}</span>}
-                </div>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
-                <SpellTypeIcon kind={spell.type} size={12} color="#777" />
-                <div style={{ color: '#555', fontSize: 9, textTransform: 'uppercase', letterSpacing: 1 }}>{spell.type}</div>
-              </div>
-            </UIButton>
-          );
-        })
+            );
+          })}
+        </div>
       )}
+
+      {flying && (
+        <FlyingCard
+          spellId={flying.spellId}
+          spell={flying.spell}
+          from={flying.from}
+          to={flying.to}
+          onDone={() => setFlying(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Cosmetic clone of a spell card that animates from a grid card's position to its target hotbar slot on equip; the real slot re-renders underneath once the server confirms. Fixed positioning escapes the scrolling tab content, so this reads correctly regardless of scroll offset. */
+function FlyingCard({ spellId, spell, from, to, onDone }: {
+  spellId: string;
+  spell: SpellDef;
+  from: DOMRect;
+  to: DOMRect;
+  onDone: () => void;
+}) {
+  const [flownIn, setFlownIn] = useState(false);
+
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setFlownIn(true));
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  const dx = to.left - from.left;
+  const dy = to.top - from.top;
+  const scaleX = to.width / from.width;
+  const scaleY = to.height / from.height;
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        left: from.left,
+        top: from.top,
+        width: from.width,
+        height: from.height,
+        transformOrigin: 'top left',
+        transform: flownIn ? `translate(${dx}px, ${dy}px) scale(${scaleX}, ${scaleY})` : 'translate(0px, 0px) scale(1, 1)',
+        transition: 'transform 420ms cubic-bezier(0.22, 1, 0.36, 1)',
+        pointerEvents: 'none',
+        zIndex: 700,
+        filter: 'drop-shadow(0 10px 22px rgba(0,0,0,0.65))',
+      }}
+      onTransitionEnd={onDone}
+    >
+      <SpellCard spellId={spellId} spell={spell} slotLabel="" cooldownSec={0} cooldownPct={0} width={from.width} height={from.height} />
     </div>
   );
 }
@@ -434,21 +518,23 @@ function GlossaryTab({ unlockedList, classColor }: {
       <div style={{ color: '#aaa', fontSize: 10, letterSpacing: 3, textTransform: 'uppercase', marginBottom: 14 }}>
         Unlocked — {unlockedList.length} node{unlockedList.length !== 1 ? 's' : ''}
       </div>
-      {unlockedList.map(({ id, label, description }) => {
-        const kind = iconKindForSpellId(id);
-        return (
-          <div key={id} style={{ padding: '10px 0', borderBottom: '1px solid #1c1c2c' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
-              <div style={{ color: classColor, fontSize: 12 }}>{label}</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 3, color: '#777' }}>
-                <SpellTypeIcon kind={kind} size={10} color="#777" />
-                <span style={{ fontSize: 9, letterSpacing: 1, textTransform: 'uppercase' }}>{kind}</span>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', columnGap: 32 }}>
+        {unlockedList.map(({ id, label, description }) => {
+          const kind = iconKindForSpellId(id);
+          return (
+            <div key={id} style={{ padding: '10px 0', borderBottom: '1px solid #1c1c2c' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+                <div style={{ color: classColor, fontSize: 12 }}>{label}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 3, color: '#777' }}>
+                  <SpellTypeIcon kind={kind} size={10} color="#777" />
+                  <span style={{ fontSize: 9, letterSpacing: 1, textTransform: 'uppercase' }}>{kind}</span>
+                </div>
               </div>
+              <div style={{ color: '#bbb', fontSize: 11, lineHeight: 1.5 }}>{description}</div>
             </div>
-            <div style={{ color: '#bbb', fontSize: 11, lineHeight: 1.5 }}>{description}</div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -479,7 +565,7 @@ function SettingsTab({ ws, onClose, classColor, experimentLabAvailable, onOpenEx
   }
 
   return (
-    <div>
+    <div style={{ maxWidth: 640 }}>
       <div style={{ color: '#aaa', fontSize: 10, letterSpacing: 3, textTransform: 'uppercase', marginBottom: 20 }}>
         Settings
       </div>

@@ -191,10 +191,12 @@ export class Room {
     // that cleanup deletes the very entries this needs to inspect one last time.
     this._tickStatusEffects(now);
 
-    // Tick player status effects (generic expiry cleanup)
+    // Tick player status effects (generic expiry cleanup) + mana regen
     for (const pid of this.playerIds) {
       const player = this.server.players.get(pid);
-      if (player) player.tickEffects(now);
+      if (!player) continue;
+      player.tickEffects(now);
+      if (player.isAlive) player.regenMana(dt);
     }
 
     // Auto-resolve any skill-tree fork votes nobody answered in time
@@ -606,6 +608,7 @@ export class Room {
       killer.xp += XP_PER_KILL;
       killer.level = levelFromXp(killer.xp);
       if (killer.level > prevLevel) {
+        killer.recalcMana();
         // Skill points come from leveling up, not from the kill itself -- a
         // kill that doesn't cross a level threshold grants none, so "level"
         // stays the thing that actually gates progression.
