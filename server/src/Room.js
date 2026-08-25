@@ -12,6 +12,7 @@ import {
   STARTING_SKILL_POINTS, POINTS_PER_LEVEL,
   STATE_HISTORY_TICKS, MAX_CONCURRENT_DOMAINS, PLAYER_CAPSULE_RADIUS,
   GROUND_ACCEL, AIR_ACCEL, GROUND_FRICTION, STOP_SPEED, AIR_CAP_SPEED, MAX_AIR_JUMPS,
+  CLASSES,
 } from 'shared/constants';
 import { getSpell } from 'shared/spells';
 import { XP_PER_KILL, levelFromXp, rankForLevel, hatBuffTierForLevel, HAT_BUFF_DAMAGE_MULT } from 'shared/leveling';
@@ -32,10 +33,13 @@ const SPAWN_POSITIONS = [
 ];
 
 export class Room {
-  constructor({ id, server, respawnEnabled = true }) {
+  constructor({ id, server, respawnEnabled = true, matchMode = false }) {
     this.id = id;
     this.server = server;
     this.respawnEnabled = respawnEnabled;
+    this.matchMode = matchMode; // true for a private single-player-vs-bots match room -- gates team win-condition checks
+    this.matchEnded = false;
+    this.teamEliminationOrder = []; // team ids, in the order every one of their members died -- see _maybeEndMatch
     this.playerIds = new Set();
     this.projectiles = new Map();  // projectileId → projectile state
     this.barriers = new Map();     // barrierId → barrier state
@@ -100,9 +104,10 @@ export class Room {
     this.server.broadcast(this.id, { type: S2C.PLAYER_LEFT, playerId });
   }
 
-  spawnPlayer(player) {
-    const pos = SPAWN_POSITIONS[this.spawnIndex % SPAWN_POSITIONS.length];
-    this.spawnIndex++;
+  /** `position` overrides the round-robin SPAWN_POSITIONS pick -- used by setupMatch() to cluster teammates. */
+  spawnPlayer(player, position = null) {
+    const pos = position ?? SPAWN_POSITIONS[this.spawnIndex % SPAWN_POSITIONS.length];
+    if (!position) this.spawnIndex++;
     player.spawn({ ...pos });
     this.server.broadcast(this.id, {
       type: S2C.PLAYER_RESPAWNED,
@@ -115,14 +120,39 @@ export class Room {
     this._pendingRespawns.push({ playerId, at: Date.now() + RESPAWN_DELAY });
   }
 
+  /**
+   * Sets up a private match room for `mode` (see shared/gameModes.js):
+   * `humanPlayer` (already added to the room + class-selected by the
+   * caller) fills team 0's first slot; every remaining slot across every
+   * team is a bot. Teammates spawn clustered around a shared anchor point
+   * on the existing SPAWN_POSITIONS ring so teams start near each other.
+   */
+  setupMatch(mode, humanPlayer) {
+    mode.teamSizes.forEach((size, team) => {
+      const anchor = SPAWN_POSITIONS[team % SPAWN_POSITIONS.length];
+      for (let slot = 0; slot < size; slot++) {
+        const jitterX = slot === 0 ? 0 : (Math.random() - 0.5) * 6;
+        const jitterZ = slot === 0 ? 0 : (Math.random() - 0.5) * 6;
+        const position = { x: anchor.x + jitterX, y: anchor.y, z: anchor.z + jitterZ };
+        if (team === 0 && slot === 0) {
+          humanPlayer.team = 0;
+          this.spawnPlayer(humanPlayer, position);
+        } else {
+          const wizardClass = CLASSES[Math.floor(Math.random() * CLASSES.length)];
+          this.spawnBot({ class: wizardClass, behavior: 'aggressive', position, team });
+        }
+      }
+    });
+  }
+
   /** Creates and spawns a bot into this room. Returns the Bot instance. */
-  spawnBot({ class: wizardClass, behavior = 'aggressive', position = null, loadout = null, autoEquipOnLevel = true }) {
+  spawnBot({ class: wizardClass, behavior = 'aggressive', position = null, loadout = null, autoEquipOnLevel = true, team = null }) {
     const id = `bot-${uuid()}`;
-    // "EarthBot_4324" -- names the class so a killfeed/scoreboard entry reads
+    // "DruidBot_4324" -- names the class so a killfeed/scoreboard entry reads
     // as an actual opponent instead of an anonymous id fragment.
     const namePrefix = CLASS_LABEL[wizardClass] ?? 'Wizard';
     const username = `${namePrefix}Bot_${1000 + Math.floor(Math.random() * 9000)}`;
-    const bot = new Bot({ id, username, class: wizardClass, behavior, autoEquipOnLevel });
+    const bot = new Bot({ id, username, class: wizardClass, behavior, autoEquipOnLevel, team });
     if (loadout) bot.equippedSpells = [...loadout];
 
     this.server.players.set(id, bot);
@@ -186,7 +216,7 @@ export class Room {
     // Resolve windup casts whose delay has elapsed
     this.spellSystem.tickPendingCasts(now);
 
-    // Numeric consequences of status effects (burn DoT, Earth Fossilize on Petrify
+    // Numeric consequences of status effects (burn DoT, Crystalmancer Fossilize on Petrify
     // expiry) — must run BEFORE the generic per-player expiry cleanup below, since
     // that cleanup deletes the very entries this needs to inspect one last time.
     this._tickStatusEffects(now);
@@ -256,10 +286,10 @@ export class Room {
 
     const horizSpeed = Math.hypot(player.velocity.x, player.velocity.z);
 
-    // Earth Bedrock: standing still (grounded, no horizontal drift) for 1.5s grants a damage buff
+    // Druid Rooted: standing still (grounded, no horizontal drift) for 1.5s grants a damage buff
     if (horizSpeed < 0.05 && player.isGrounded) {
       if (!player.bedrockIdleSince) player.bedrockIdleSince = now;
-      player.bedrock = player.unlockedNodes.has('bedrock') && (now - player.bedrockIdleSince) >= 1500;
+      player.bedrock = player.unlockedNodes.has('rooted') && (now - player.bedrockIdleSince) >= 1500;
     } else {
       player.bedrockIdleSince = 0;
       player.bedrock = false;
@@ -363,6 +393,11 @@ export class Room {
       this.spellSystem.handleMobility(player, input);
     }
 
+    // Handle defensive spell (Q)
+    if (input.defensive) {
+      this.spellSystem.handleDefensive(player);
+    }
+
     // Handle basic attack (RMB) / melee (F) -- universal, outside the equip slots
     if (input.basicAttack) {
       this.spellSystem.handleBasicAttack(player, input.basicAttack.aimDir, input.clientTimestamp);
@@ -372,12 +407,21 @@ export class Room {
     }
   }
 
-  applyDamage(targetId, damage, sourceId, spellId, isHeadshot = false) {
+  applyDamage(targetId, damage, sourceId, spellId, isHeadshot = false, bypassDefense = false) {
     const target = this.server.players.get(targetId);
     if (!target || !target.isAlive) return 0;
     if (target.hasEffect('phase')) return 0;
     if (target.isGodMode) return 0; // Experiment Lab: invulnerable
     if (target.isChoosingBranch) return 0; // hidden + frozen at the fork-choice screen
+
+    // Friendly fire: no-op damage between two different players sharing a
+    // non-null team (see shared/gameModes.js / Room.setupMatch). Lobby and
+    // Experiment Lab players are never on a team (team stays null), so this
+    // never affects normal free-for-all combat.
+    if (sourceId !== targetId) {
+      const sourcePlayerForTeam = this.server.players.get(sourceId);
+      if (sourcePlayerForTeam && sourcePlayerForTeam.team != null && sourcePlayerForTeam.team === target.team) return 0;
+    }
 
     // Interrupt an in-progress windup cast (Death Note, Petrify, ...) if it allows it
     if (target.pendingCast?.interruptible) {
@@ -397,8 +441,8 @@ export class Room {
     const attacker = this.server.players.get(sourceId);
     const now = Date.now();
 
-    // Earth: Earthen Skin passive
-    if (target.class === 'earth' && target.unlockedNodes.has('earthen_skin')) {
+    // Druid: Thick Bark passive
+    if (target.class === 'druid' && target.unlockedNodes.has('thick_bark')) {
       const defReduction = target.health / target.maxHealth < 0.5 ? 0.10 : 0.05;
       finalDamage *= (1 - defReduction);
     }
@@ -452,8 +496,21 @@ export class Room {
       }
     }
 
-    // Earth Tectonic Focus: +15% damage on Avalanche and Fissure
-    if (attacker?.unlockedNodes.has('tectonic_focus') && (spellId === 'avalanche' || spellId === 'fissure')) {
+    // Crystalmancer Resonance: consecutive crystal-spell hits build stacks (cap 3, 5s decay); stacks buff all of the attacker's crystal damage
+    if (attacker?.unlockedNodes.has('resonance') && getSpell(spellId)?.school === 'crystalmancer') {
+      attacker.resonanceStacks = Math.min(3, attacker.resonanceStacks + 1);
+      attacker.resonanceExpiry = now + 5000;
+    }
+    if (attacker?.unlockedNodes.has('resonance')) {
+      if (attacker.resonanceExpiry > now && attacker.resonanceStacks > 0) {
+        finalDamage *= (1 + 0.10 * attacker.resonanceStacks);
+      } else {
+        attacker.resonanceStacks = 0;
+      }
+    }
+
+    // Druid Feral Focus: +15% damage on Avalanche and Fissure
+    if (attacker?.unlockedNodes.has('feral_focus') && (spellId === 'avalanche' || spellId === 'fissure')) {
       finalDamage *= 1.15;
     }
 
@@ -477,13 +534,13 @@ export class Room {
       attacker.lastIceSpellCastAt = now;
     }
 
-    // Earth Geologic: stacked defense is consumed (reset) by taking a hit
+    // Crystalmancer Geologic: stacked defense is consumed (reset) by taking a hit
     if (target.unlockedNodes.has('geologic') && target.geologicStacks > 0) {
       finalDamage *= (1 - 0.05 * target.geologicStacks);
       target.geologicStacks = 0;
     }
 
-    // Earth Bedrock: +20% damage while the standing-still buff is active
+    // Druid Rooted: +20% damage while the standing-still buff is active
     if (attacker?.bedrock) {
       finalDamage *= 1.2;
     }
@@ -514,6 +571,34 @@ export class Room {
     // before this runs, so this only fires for "just tickled a frozen target").
     if (STATUS_EFFECTS.freeze.breakOnDamage && target.hasEffect('freeze')) {
       target.removeEffect('freeze');
+    }
+
+    // Defensive spell (Q) -- checked against the fully modified damage, so it
+    // reads as "the actual hit" same as every reduction above. bypassDefense
+    // is set on a reflected counter-hit so a full-counter can't chain into
+    // itself if both players happen to be countering at once.
+    if (!bypassDefense && target.defensiveActive) {
+      if (now < target.defensiveExpiry) {
+        if (target.defensiveMode === 'counter') {
+          target.defensiveActive = false;
+          const reflected = Math.round(finalDamage);
+          if (attacker && sourceId !== targetId && reflected > 0) {
+            this.applyDamage(sourceId, reflected, targetId, spellId, false, true);
+          }
+          return 0;
+        }
+        if (target.defensiveMode === 'absorb') {
+          const absorbed = Math.min(target.defensiveAbsorbRemaining, finalDamage);
+          target.defensiveAbsorbRemaining -= absorbed;
+          finalDamage -= absorbed;
+          if (target.defensiveAbsorbRemaining <= 0) target.defensiveActive = false;
+          if (finalDamage <= 0) return 0;
+        } else if (target.defensiveMode === 'reduction') {
+          finalDamage *= (1 - target.defensiveDamageReduction);
+        }
+      } else {
+        target.defensiveActive = false; // lazy expiry cleanup
+      }
     }
 
     target.health = Math.max(0, target.health - Math.round(finalDamage));
@@ -669,6 +754,67 @@ export class Room {
     }
 
     if (this.respawnEnabled) this.scheduleRespawn(player.id);
+    if (this.matchMode) this._maybeEndMatch();
+  }
+
+  /**
+   * Match rooms (see Room.setupMatch) end the moment at most one distinct
+   * team still has a living member -- respawnEnabled is false for these
+   * rooms, so "alive" only shrinks, never grows, across the room's life.
+   * Also tracks the order teams get fully wiped in (teamEliminationOrder),
+   * so the client can render a full podium/standings, not just win-or-lose.
+   */
+  _maybeEndMatch() {
+    if (this.matchEnded) return;
+    const aliveTeams = new Set();
+    const allTeams = new Set();
+    for (const pid of this.playerIds) {
+      const p = this.server.players.get(pid);
+      if (!p) continue;
+      allTeams.add(p.team);
+      if (p.isAlive) aliveTeams.add(p.team);
+    }
+
+    // A team that just lost its last living member is "eliminated" -- record
+    // it the moment it happens (not just at match end) so teams are ranked
+    // by how long they survived, not left in whatever order Set iteration
+    // happens to produce.
+    for (const team of allTeams) {
+      if (!aliveTeams.has(team) && !this.teamEliminationOrder.includes(team)) {
+        this.teamEliminationOrder.push(team);
+      }
+    }
+
+    if (aliveTeams.size <= 1) {
+      this.matchEnded = true;
+      const winningTeam = aliveTeams.size === 1 ? [...aliveTeams][0] : null;
+
+      // Podium order: the winning team (if any) first, then every eliminated
+      // team from most-recently-wiped to first-wiped (survived longest to
+      // shortest).
+      const standings = [];
+      if (winningTeam !== null) standings.push(winningTeam);
+      for (let i = this.teamEliminationOrder.length - 1; i >= 0; i--) {
+        const team = this.teamEliminationOrder[i];
+        if (team !== winningTeam) standings.push(team);
+      }
+
+      const players = [...this.playerIds]
+        .map((pid) => this.server.players.get(pid))
+        .filter(Boolean)
+        .map((p) => ({
+          id: p.id,
+          username: p.username,
+          class: p.class,
+          team: p.team,
+          isBot: !!p.isBot,
+          kills: p.kills,
+          damageDealt: Math.round(p.damageDealt),
+          isAlive: p.isAlive,
+        }));
+
+      this.server.broadcast(this.id, { type: S2C.MATCH_END, winningTeam, standings, players });
+    }
   }
 
   /** Burn's per-tick DoT — the only status effect that deals damage over time on its own clock. */
@@ -684,7 +830,7 @@ export class Room {
         this.applyDamage(pid, dmg, burn.sourceId ?? pid, 'burn');
       }
 
-      // Earth Fossilize: Petrify expiring leaves a lingering slow, if the caster unlocked it
+      // Crystalmancer Fossilize: Petrify expiring leaves a lingering slow, if the caster unlocked it
       const petrify = player.activeEffects.get('petrify');
       if (petrify && now > petrify.expiresAt) {
         const caster = this.server.players.get(petrify.sourceId);
@@ -718,7 +864,8 @@ export class Room {
     switch (domain.spellId) {
       case 'absolute_zero':  return isOwner ? 1 : (config.speedMultiplier ?? 1);
       case 'the_last_word':  return isOwner ? 1 : (config.otherSpeedMultiplier ?? 1);
-      case 'terra_domain':   return isOwner ? (config.ownerSpeedMultiplier ?? 1) : (config.otherSpeedMultiplier ?? 1);
+      case 'wildwood_domain':
+      case 'prism_field':    return isOwner ? (config.ownerSpeedMultiplier ?? 1) : (config.otherSpeedMultiplier ?? 1);
       default: return 1;
     }
   }

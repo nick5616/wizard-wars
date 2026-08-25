@@ -33,6 +33,17 @@ export const MAX_AIR_JUMPS = 1; // double jump: one extra jump usable mid-air, r
 // Gravity
 export const GRAVITY = -18; // units/s^2
 
+// Movement-curve aiming: strafing/backpedaling while casting a projectile or
+// arc spell bends the shot, deterministically (not random spread) so it's a
+// learnable tech -- lead your aim to compensate, or strafe on purpose to
+// curve a shot around cover. See SpellSystem._castProjectile.
+export const MOVE_CURVE_SPEED_CAP = 1.5; // multiple of BASE_MOVE_SPEED at which curve/arc-angle effect maxes out (covers bhop speeds)
+export const MAX_CURVE_DEG = 14; // max lateral bend at full strafe speed
+export const BASE_ARC_ANGLE_DEG = 38; // default lob angle for 'arc' spells, standing still
+export const ARC_ANGLE_SWING_DEG = 16; // how much forward/backward movement flattens/steepens the lob
+export const MIN_ARC_ANGLE_DEG = 15;
+export const MAX_ARC_ANGLE_DEG = 55;
+
 // Spell casting
 export const MAX_EQUIPPED_SPELLS = 4;
 export const CAST_MAX_RANGE = 80; // units
@@ -50,4 +61,4 @@ export const POINTS_PER_LEVEL = 1;
 export const DEATH_NOTE_DAMAGE_WINDOW = 10000; // 10s — must have hit target recently
 
 // Classes
-export const CLASSES = ['fire', 'ice', 'dark', 'sword', 'earth'];
+export const CLASSES = ['fire', 'ice', 'dark', 'sword', 'druid', 'crystalmancer'];

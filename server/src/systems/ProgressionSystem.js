@@ -1,8 +1,9 @@
 import { v4 as uuid } from 'uuid';
 import { S2C } from 'shared/events';
-import { hatBuffTierForLevel, HAT_BUFF_DAMAGE_MULT, HAT_BUFF_DURATION_MS } from 'shared/leveling';
+import { hatBuffTierForLevel, HAT_BUFF_DAMAGE_MULT, HAT_BUFF_DURATION_MS, maxManaFor } from 'shared/leveling';
 import { SKILL_TREES, getNode, canUnlockNode, getForkPair } from 'shared/skillTrees';
-import { DEFAULT_EQUIPPED } from 'shared/spells';
+import { DEFAULT_EQUIPPED, MAX_SPELL_SLOTS, MOBILITY_SPELL, DEFENSIVE_SPELL } from 'shared/spells';
+import { CLASS_FORK_GROUP } from 'shared/classFlavor';
 
 // The one designated fork per class (branchGroup) is a permanent,
 // once-per-life commitment -- that gets the full dramatic despawn treatment
@@ -184,6 +185,51 @@ export class ProgressionSystem {
     player.unlockedNodes = new Set(defaults);
     player.equippedSpells = [...DEFAULT_EQUIPPED[player.class]];
     player.divergedBranch = { [decidedGroup]: other.branch };
+  }
+
+  /**
+   * Debug mode: live-swap to ANY subclass of ANY class without dying or
+   * respawning -- no room.spawnPlayer, position/HP/room untouched, so bots
+   * keep fighting and the Experiment Lab session just keeps going. Crossing
+   * classes force-unlocks the new class's whole tree on the spot (debug
+   * mode's usual "everything unlocked" guarantee, just applied lazily as
+   * you visit each class) instead of requiring a trip through DEBUG_GRANT
+   * again. Either way this re-stamps divergedBranch (symbol/title flavor)
+   * and re-equips the loadout to the chosen branch's actual spell chain so
+   * the switch is felt, not just cosmetic.
+   */
+  setDebugSubclass(player, wizardClass, branch) {
+    if (!player.isDebugMode) return;
+    const branchGroup = CLASS_FORK_GROUP[wizardClass];
+    const pair = getForkPair(wizardClass, branchGroup);
+    const target = pair?.find((n) => n.branch === branch);
+    if (!target) return;
+
+    if (player.class !== wizardClass) {
+      player.class = wizardClass;
+      player.mobilitySpell = MOBILITY_SPELL[wizardClass];
+      player.defensiveSpell = DEFENSIVE_SPELL[wizardClass];
+      player.maxMana = maxManaFor(wizardClass, player.level);
+      player.mana = player.maxMana;
+      this.forceUnlockAll(player);
+    }
+
+    player.divergedBranch = { [branchGroup]: branch };
+
+    const tree = SKILL_TREES[wizardClass] ?? [];
+    const chain = [target];
+    let current = target;
+    for (;;) {
+      const next = tree.find((n) => n.prereqs.length === 1 && n.prereqs[0] === current.id);
+      if (!next) break;
+      chain.push(next);
+      current = next;
+    }
+
+    const trunk = tree.filter((n) => n.tier < target.tier && n.type === 'spell').map((n) => n.id);
+    const branchSpells = chain.filter((n) => n.type === 'spell').map((n) => n.id);
+    const loadout = [...trunk, ...branchSpells];
+    player.equippedSpells = Array.from({ length: MAX_SPELL_SLOTS }, (_, i) => loadout[i] ?? null);
   }
 
   // ── Auto-equip ───────────────────────────────────────────────────────────

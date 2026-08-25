@@ -4,7 +4,8 @@
     "ice": { "frame": "crystalline", "cornerGlyph": "❖", "patternSalt": 22 },
     "dark": { "frame": "torn", "cornerGlyph": "◈", "patternSalt": 33 },
     "sword": { "frame": "beveled", "cornerGlyph": "◆", "patternSalt": 44 },
-    "earth": { "frame": "rough", "cornerGlyph": "⬢", "patternSalt": 55 }
+    "druid": { "frame": "lotus", "cornerGlyph": "❀", "patternSalt": 66 },
+    "crystalmancer": { "frame": "shard", "cornerGlyph": "⬢", "patternSalt": 77 }
   },
   "rarityTiers": [
     { "maxTier": 1, "name": "common", "gem": "#8890a0" },

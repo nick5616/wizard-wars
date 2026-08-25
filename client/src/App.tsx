@@ -8,14 +8,17 @@ import { WebSocketClient } from './networking/WebSocketClient';
 import { ClockSync } from './networking/ClockSync';
 import { ClientPrediction } from './networking/ClientPrediction';
 import { EntityInterpolation } from './networking/EntityInterpolation';
-import { useGameStore } from './stores/gameStore';
+import { useGameStore, type MatchResultPlayer } from './stores/gameStore';
 import { useNetworkStore } from './stores/networkStore';
 import { Scene } from './components/core/Scene';
 import { HUD } from './components/ui/HUD';
+import { MainMenu } from './components/ui/MainMenu';
+import { ModeSelect } from './components/ui/ModeSelect';
 import { ClassSelect } from './components/ui/ClassSelect';
-import { SkillTree } from './components/ui/SkillTree';
+import { MatchEndScreen } from './components/ui/MatchEndScreen';
 import { PauseMenu } from './components/ui/PauseMenu';
 import { ExperimentLab } from './components/ui/ExperimentLab';
+import { DesignLab } from './components/ui/DesignLab';
 import { NotificationFeed } from './components/ui/NotificationFeed';
 import { SkillVotePrompt } from './components/ui/SkillVotePrompt';
 import { DeathScreen } from './components/ui/DeathScreen';
@@ -26,6 +29,11 @@ import { RANKS } from 'shared/leveling';
 import type { GameTickPayload, WizardClass } from './types/game.types';
 import { IS_LOCALHOST } from './utils/isLocalhost';
 import { getOrCreateClientId } from './utils/clientId';
+
+// How often GAME_TICK payloads get synced into the React store, well below
+// the server's 64Hz tick rate -- see the GAME_TICK handler below for why.
+const REACT_SYNC_HZ = 20;
+const REACT_SYNC_INTERVAL_MS = 1000 / REACT_SYNC_HZ;
 
 const WS_BASE_URL = import.meta.env.VITE_WS_URL ?? 'ws://localhost:8080';
 // Stable per-browser id sent on connect so the server can restore a
@@ -56,10 +64,18 @@ export default function App() {
   const ws = useRef(new WebSocketClient(WS_URL, clockSync.current));
   const prediction = useRef(new ClientPrediction());
   const interpolation = useRef(new EntityInterpolation());
+  const lastReactSyncRef = useRef(0);
 
-  const [showSkillTree, setShowSkillTree] = useState(false);
   const [showPauseMenu, setShowPauseMenu] = useState(false);
+  // Which pause menu tab is showing -- lifted up here (rather than owned
+  // internally by PauseMenu) so the Tab key can jump straight to the Skill
+  // Tree tab even while the menu is already open on something else, and so
+  // Escape reopens on whatever tab was last visible.
+  const [pauseMenuTab, setPauseMenuTab] = useState<'spells' | 'tree' | 'glossary' | 'settings'>('spells');
   const [showExperimentLab, setShowExperimentLab] = useState(false);
+  const [showDesignLab, setShowDesignLab] = useState(false);
+  // Set by ModeSelect, consumed by ClassSelect -- see onClassSelected below.
+  const [pendingMode, setPendingMode] = useState<string | null>(null);
 
   // Must be declared before the useEffect that depends on it
   const phase = useGameStore((s) => s.phase);
@@ -73,14 +89,15 @@ export default function App() {
   // (voteState.blocking === false) is a light, non-blocking corner nudge and
   // must NOT freeze the camera/movement.
   useEffect(() => {
-    const blocking = showSkillTree || showPauseMenu || showExperimentLab || phase === 'class_select' || phase === 'connecting' || voteState?.blocking === true;
+    const menuPhase = phase === 'class_select' || phase === 'connecting' || phase === 'main_menu' || phase === 'mode_select' || phase === 'match_end';
+    const blocking = showPauseMenu || showExperimentLab || showDesignLab || menuPhase || voteState?.blocking === true;
     useGameStore.getState().setMenuOpen(blocking);
-  }, [showSkillTree, showPauseMenu, showExperimentLab, phase, voteState]);
+  }, [showPauseMenu, showExperimentLab, showDesignLab, phase, voteState]);
   const {
     setPhase, applyTick, setLocalClass, addKillFeedEntry, setLocalAlive, setLocalPosition, spawnDamageNumber,
-    pushNotification, setVoteState, setLastDeath,
+    pushNotification, setVoteState, setLastDeath, setMatchActive, setMatchResult,
   } = useGameStore.getState();
-  const { setLocalPlayerId, setRoomId, setRestoredUsername } = useNetworkStore.getState();
+  const { setLocalPlayerId, setRoomId, setRestoredUsername, setRestoredClass } = useNetworkStore.getState();
 
   useEffect(() => {
     const wsClient = ws.current;
@@ -94,21 +111,25 @@ export default function App() {
       const restoredUsername = msg.username as string | null;
       setLocalPlayerId(playerId);
 
-      if (restoredClass) {
-        // Resumed session (see server/src/GameServer.js _restoreAndGreet):
-        // same name/class/level/progress as before the disconnect -- join
-        // straight back into the arena instead of re-picking a class.
-        setLocalClass(restoredClass);
-        wsClient.send(C2S.JOIN_ROOM, { roomId: 'lobby' });
-        setPhase('playing');
-      } else {
-        // First-timer, or a returning player who disconnected before ever
-        // picking a class -- still show class_select, but pre-fill their
-        // saved name if the server had one on file.
-        if (restoredUsername) setRestoredUsername(restoredUsername);
-        wsClient.send(C2S.JOIN_ROOM, { roomId: 'lobby', username: restoredUsername ?? `Wizard_${playerId.slice(0, 4)}` });
-        setPhase('class_select');
-      }
+      // Land on the main menu first regardless of session state -- neither
+      // branch here joins a room or picks a class anymore, that's deferred
+      // to whichever menu button the player actually clicks (see
+      // onMultiplayer/onSinglePlayer below). A resumed session's saved
+      // class/username are stashed for onMultiplayer to pick up so clicking
+      // Multiplayer can still drop straight back into the arena.
+      if (restoredClass) setRestoredClass(restoredClass);
+      if (restoredUsername) setRestoredUsername(restoredUsername);
+      setPhase('main_menu');
+    });
+
+    const offMatchEnd = wsClient.on(S2C.MATCH_END, (msg) => {
+      setMatchActive(false);
+      setMatchResult({
+        winningTeam: (msg.winningTeam as number | null) ?? null,
+        standings: (msg.standings as number[] | undefined) ?? [],
+        players: (msg.players as MatchResultPlayer[] | undefined) ?? [],
+      });
+      setPhase('match_end');
     });
 
     const offRoomState = wsClient.on(S2C.ROOM_STATE, (msg) => {
@@ -133,17 +154,31 @@ export default function App() {
         useGameStore.setState({ serverCorrectedPos: corrected });
       }
 
-      // Feed remote players into interpolation
+      // Feed remote players into interpolation -- every tick (64Hz), independent
+      // of the throttled React sync below, so remote-entity motion stays smooth.
       for (const [pid, pstate] of Object.entries(payload.players)) {
         if (pid !== localId) {
           interpolation.current.record(pid, payload.timestamp, pstate);
         }
       }
-
-      applyTick(payload.players, payload.projectiles, payload.effects, payload.domains, payload.barriers, payload.tick, payload.timestamp, localId);
-
-      // Prune disconnected players from interpolation
       interpolation.current.prune(new Set(Object.keys(payload.players)));
+
+      // Sync to the React store at REACT_SYNC_HZ instead of every 64Hz tick.
+      // applyTick replaces players/projectiles/effects/domains/barriers with
+      // new object references every call, so anything subscribed to those
+      // slices (Scene, SpellRenderer, HUD) re-rendered on every single tick
+      // regardless of whether anything visible changed -- that reconciliation
+      // work was competing with r3f's render loop for the main thread and was
+      // the actual cause of janky movement (reproduces on localhost, since
+      // it's not network-driven at all). Nothing that needs full-tick
+      // precision reads from here: own position is local-predicted, remote
+      // players come from the interpolation buffer above, and projectiles
+      // integrate their own velocity per frame.
+      const now = performance.now();
+      if (now - lastReactSyncRef.current >= REACT_SYNC_INTERVAL_MS) {
+        lastReactSyncRef.current = now;
+        applyTick(payload.players, payload.projectiles, payload.effects, payload.domains, payload.barriers, payload.tick, payload.timestamp, localId);
+      }
     });
 
     const offHitConfirmed = wsClient.on(S2C.HIT_CONFIRMED, (msg) => {
@@ -245,19 +280,19 @@ export default function App() {
       }
     });
 
-    // Keyboard: Tab → skill tree, Escape → pause menu
+    // Keyboard: both Tab and Escape open the pause menu -- Tab jumps straight
+    // to its Skill Tree tab, Escape just toggles it open/closed on whatever
+    // tab was last showing.
     const onKeyDown = (e: KeyboardEvent) => {
+      const p = useGameStore.getState().phase;
       if (e.code === 'Tab') {
         e.preventDefault();
-        const p = useGameStore.getState().phase;
-        if (p === 'playing' || p === 'skill_tree') {
-          setShowSkillTree(prev => !prev);
-          setShowPauseMenu(false);
+        if (p === 'playing' || p === 'dead') {
+          setPauseMenuTab('tree');
+          setShowPauseMenu(true);
         }
       }
       if (e.code === 'Escape') {
-        setShowSkillTree(false);
-        const p = useGameStore.getState().phase;
         if (p === 'playing' || p === 'dead') {
           setShowPauseMenu(prev => !prev);
         } else {
@@ -282,7 +317,6 @@ export default function App() {
         // the fork screen unmounted.
         if ((p === 'playing' || p === 'dead') && !useGameStore.getState().voteState?.blocking) {
           setShowPauseMenu(true);
-          setShowSkillTree(false);
         }
       }
     };
@@ -295,6 +329,7 @@ export default function App() {
 
     return () => {
       offJoined();
+      offMatchEnd();
       offRoomState();
       offTick();
       offHitConfirmed();
@@ -316,6 +351,36 @@ export default function App() {
   function onClassSelected(c: WizardClass) {
     setLocalClass(c);
     setPhase('playing');
+    if (pendingMode) {
+      // ClassSelect already sent C2S.START_MATCH instead of SELECT_CLASS
+      // when pendingMode is set -- see its `pendingMode` prop.
+      useGameStore.getState().setMatchActive(true);
+      setPendingMode(null);
+    }
+  }
+
+  function onMultiplayer() {
+    const { restoredClass, restoredUsername, localPlayerId } = useNetworkStore.getState();
+    if (restoredClass) {
+      // Resumed session (see server/src/GameServer.js _restoreAndGreet):
+      // same name/class/level/progress as before the disconnect -- join
+      // straight back into the arena instead of re-picking a class.
+      setLocalClass(restoredClass);
+      ws.current.send(C2S.JOIN_ROOM, { roomId: 'lobby' });
+    } else {
+      const playerId = localPlayerId ?? '';
+      ws.current.send(C2S.JOIN_ROOM, { roomId: 'lobby', username: restoredUsername ?? `Wizard_${playerId.slice(0, 4)}` });
+      setPhase('class_select');
+    }
+  }
+
+  function onSinglePlayer() {
+    setPhase('mode_select');
+  }
+
+  function onPickMode(modeId: string) {
+    setPendingMode(modeId);
+    setPhase('class_select');
   }
 
   return (
@@ -332,10 +397,21 @@ export default function App() {
       <NotificationFeed />
       {phase === 'playing' && <SkillVotePrompt ws={ws.current} />}
       {phase === 'dead' && <DeathScreen ws={ws.current} />}
+      {phase === 'match_end' && <MatchEndScreen ws={ws.current} />}
+
+      {/* Landing screen: Single Player / Multiplayer */}
+      {phase === 'main_menu' && (
+        <MainMenu onSinglePlayer={onSinglePlayer} onMultiplayer={onMultiplayer} />
+      )}
+
+      {/* Single Player: bot game-mode picker */}
+      {phase === 'mode_select' && (
+        <ModeSelect onPick={onPickMode} onBack={() => setPhase('main_menu')} />
+      )}
 
       {/* Class selection (blocks scene interaction until chosen) */}
       {phase === 'class_select' && (
-        <ClassSelect ws={ws.current} onSelected={onClassSelected} />
+        <ClassSelect ws={ws.current} onSelected={onClassSelected} pendingMode={pendingMode} />
       )}
 
       {/* Connecting overlay */}
@@ -356,21 +432,23 @@ export default function App() {
         </div>
       )}
 
-      {/* Skill tree overlay */}
-      {showSkillTree && (
-        <SkillTree ws={ws.current} onClose={() => setShowSkillTree(false)} />
-      )}
-
-      {/* Pause menu overlay */}
+      {/* Pause menu overlay -- includes the Skill Tree as one of its tabs */}
       {showPauseMenu && (
         <PauseMenu
           ws={ws.current}
           onClose={() => setShowPauseMenu(false)}
+          tab={pauseMenuTab}
+          onTabChange={setPauseMenuTab}
           experimentLabAvailable={IS_LOCALHOST}
           onOpenExperimentLab={() => {
             setShowPauseMenu(false);
             ws.current.send(C2S.JOIN_ROOM, { experiment: true, username: `Wizard_${(useNetworkStore.getState().localPlayerId ?? '').slice(0, 4)}` });
             setShowExperimentLab(true);
+          }}
+          designLabAvailable={IS_LOCALHOST}
+          onOpenDesignLab={() => {
+            setShowPauseMenu(false);
+            setShowDesignLab(true);
           }}
         />
       )}
@@ -385,6 +463,11 @@ export default function App() {
             ws.current.send(C2S.JOIN_ROOM, { roomId: 'lobby', username: `Wizard_${(useNetworkStore.getState().localPlayerId ?? '').slice(0, 4)}` });
           }}
         />
+      )}
+
+      {/* Design Lab overlay (localhost only) -- card look generator + bank */}
+      {showDesignLab && (
+        <DesignLab ws={ws.current} onClose={() => setShowDesignLab(false)} />
       )}
     </div>
   );

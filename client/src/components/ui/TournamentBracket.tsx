@@ -19,7 +19,7 @@ import { UIButton } from './UIButton';
 import { SpellTypeIcon } from './SpellTypeIcon';
 
 const CLASS_COLORS: Record<WizardClass, string> = {
-  fire: '#ff4500', ice: '#a0d8ff', dark: '#cc00ff', sword: '#c8c8c8', earth: '#8B6914',
+  fire: '#ff4500', ice: '#a0d8ff', dark: '#cc00ff', sword: '#c8c8c8', druid: '#5a9e3d', crystalmancer: '#8fd4ff',
 };
 
 const BRACKET_SIZES = [4, 8] as const;
@@ -94,7 +94,7 @@ export function TournamentBracket({ ws }: { ws: WebSocketClient }) {
     setSize(n);
     setRounds(null);
     setParticipants((prev) => {
-      const classes: WizardClass[] = ['fire', 'ice', 'dark', 'sword', 'earth'];
+      const classes: WizardClass[] = ['fire', 'ice', 'dark', 'sword', 'druid', 'crystalmancer'];
       const next = [...prev];
       while (next.length < n) next.push(makeParticipant(next.length, classes[next.length % classes.length]));
       return next.slice(0, n);
@@ -305,7 +305,7 @@ function ParticipantConfigCard({ participant, onChange }: { participant: Partici
     <div style={{ border: `1px solid ${color}33`, borderRadius: 4, padding: 10 }}>
       <div style={{ color, fontSize: 10, letterSpacing: 1, marginBottom: 6 }}>{participant.label}</div>
       <select value={participant.class} onChange={(e) => setClass(e.target.value as WizardClass)} style={{ ...selectStyle, width: '100%', marginBottom: 5 }}>
-        {(['fire', 'ice', 'dark', 'sword', 'earth'] as WizardClass[]).map((c) => <option key={c} value={c}>{c}</option>)}
+        {(['fire', 'ice', 'dark', 'sword', 'druid', 'crystalmancer'] as WizardClass[]).map((c) => <option key={c} value={c}>{c}</option>)}
       </select>
       <div style={{ display: 'flex', gap: 4 }}>
         {[0, 1, 2, 3].map((slot) => (

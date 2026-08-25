@@ -12,6 +12,10 @@ import cardThemes from '../../data/spellCardThemes.json';
 interface ClassSelectProps {
   ws: WebSocketClient;
   onSelected: (c: WizardClass) => void;
+  // Set when arriving here from the Single Player mode picker (see
+  // ModeSelect/App.tsx) -- when present, picking a class starts a private
+  // bot match (C2S.START_MATCH) instead of joining the shared lobby.
+  pendingMode?: string | null;
 }
 
 interface SchoolTheme { frame: string; cornerGlyph: string; patternSalt: number; }
@@ -21,15 +25,16 @@ interface BranchFlavor { symbol: string; title: string; }
 const BRANCH_FLAVOR_MAP = BRANCH_FLAVOR as unknown as Record<string, Record<string, BranchFlavor>>;
 
 const CLASS_COLORS: Record<WizardClass, string> = {
-  fire: '#ff4500', ice: '#a0d8ff', dark: '#cc00ff', sword: '#c8c8c8', earth: '#8B6914',
+  fire: '#ff4500', ice: '#a0d8ff', dark: '#cc00ff', sword: '#c8c8c8', druid: '#5a9e3d', crystalmancer: '#8fd4ff',
 };
 
 const CLASS_ORDER: { id: WizardClass; comingSoon?: boolean }[] = [
   { id: 'fire' },
   { id: 'ice' },
   { id: 'dark' },
-  { id: 'sword', comingSoon: true },
-  { id: 'earth', comingSoon: true },
+  { id: 'sword' },
+  { id: 'druid' },
+  { id: 'crystalmancer' },
 ];
 
 interface SkillNode { id: string; label: string; tier: number; prereqs: string[]; branch?: string; }
@@ -80,7 +85,7 @@ function specCardsFor(wizardClass: WizardClass): SpecCard[] {
   ];
 }
 
-export function ClassSelect({ ws, onSelected }: ClassSelectProps) {
+export function ClassSelect({ ws, onSelected, pendingMode }: ClassSelectProps) {
   const [selected, setSelected] = useState<WizardClass>('fire');
   const [name, setName] = useState(() => useNetworkStore.getState().restoredUsername ?? '');
 
@@ -90,7 +95,11 @@ export function ClassSelect({ ws, onSelected }: ClassSelectProps) {
 
   function select(c: WizardClass) {
     const trimmed = name.trim().slice(0, 20);
-    ws.send(C2S.SELECT_CLASS, trimmed ? { class: c, username: trimmed } : { class: c });
+    if (pendingMode) {
+      ws.send(C2S.START_MATCH, trimmed ? { mode: pendingMode, class: c, username: trimmed } : { mode: pendingMode, class: c });
+    } else {
+      ws.send(C2S.SELECT_CLASS, trimmed ? { class: c, username: trimmed } : { class: c });
+    }
     onSelected(c);
   }
 

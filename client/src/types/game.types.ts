@@ -1,5 +1,5 @@
-export type WizardClass = 'fire' | 'ice' | 'dark' | 'sword' | 'earth';
-export type SpellType = 'projectile' | 'beam' | 'hitscan' | 'aoe' | 'domain' | 'direct' | 'passive' | 'mobility' | 'melee' | 'rune';
+export type WizardClass = 'fire' | 'ice' | 'dark' | 'sword' | 'druid' | 'crystalmancer';
+export type SpellType = 'projectile' | 'arc' | 'beam' | 'hitscan' | 'aoe' | 'domain' | 'direct' | 'passive' | 'mobility' | 'melee' | 'rune' | 'defensive';
 
 export interface Vec3 { x: number; y: number; z: number; }
 
@@ -26,18 +26,41 @@ export interface SpellDef {
   color: string;
   glowColor: string;
   piercing?: boolean;
+  /** 'arc' spells only: which PROJECTILE_GRAVITY band they fall under (default 'normal'). */
+  gravity?: 'none' | 'slight' | 'normal' | 'heavy';
+  onImpact?: string;
+  spreadCount?: number;
+  spreadAngle?: number;
   lifesteal?: number;
   isBarrier?: boolean;
   barrierHealth?: number;
   selfCast?: boolean;
   length?: number;
   sniperSight?: boolean;
+  wallPiercing?: boolean;
+  destroysBarriers?: boolean;
+  /** Named special-case behaviour handled in SpellSystem, e.g. 'gravity_well', 'launch_upward'. */
+  effect?: string;
+  /** Amaterasu: the burn never expires on its own. */
+  isEternal?: boolean;
+  /** Which subclass fork this spell belongs to, when it's fork-gated. */
+  branch?: string;
+  // Cast preconditions the server checks -- see SpellSystem._dispatchCast
+  // and the DENY_REASON_TEXT map in App.tsx for the player-facing wording.
+  requiresParry?: boolean;
+  requiresRecentDamage?: boolean;
+  requiresStatusEffect?: string;
+  // Defensive spells (see shared/spells.js DEFENSIVE_SPELLS)
+  damageReduction?: number;
+  absorbAmount?: number;
+  fullCounter?: boolean;
 }
 
 export interface PlayerState {
   id: string;
   username: string;
   class: WizardClass | null;
+  team: number | null;
   isAlive: boolean;
   health: number;
   maxHealth: number;
@@ -56,9 +79,13 @@ export interface PlayerState {
   xp: number;
   divergedBranch: Record<string, string>;
   unlockedNodes: string[];
+  revealedLore: string[];
   kills: number;
   ping: number;
   isBot: boolean;
+  defensiveActive?: boolean;
+  parryActive?: boolean;
+  phantomCasts?: number;
   // Bot-only (Experiment Lab)
   behavior?: 'static' | 'docile' | 'aggressive';
   autoEquipOnLevel?: boolean;

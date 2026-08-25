@@ -6,6 +6,7 @@ import { KillFeed } from './KillFeed';
 import { CombatLogHUD } from './CombatLog';
 import { DomainBanner } from './DomainBanner';
 import { NetworkStats } from './NetworkStats';
+import { FrameStats } from './FrameStats';
 import type { WebSocketClient } from '../../networking/WebSocketClient';
 
 export function HUD({ ws }: { ws: WebSocketClient }) {
@@ -22,6 +23,7 @@ export function HUD({ ws }: { ws: WebSocketClient }) {
       <CombatLogHUD ws={ws} />
       <DomainBanner />
       <NetworkStats />
+      <FrameStats />
 
       {/* Kill count */}
       <div style={{

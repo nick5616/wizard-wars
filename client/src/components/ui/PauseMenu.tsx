@@ -1,18 +1,34 @@
 import { useEffect, useRef, useState } from 'react';
 import { useGameStore } from '../../stores/gameStore';
 import { useNetworkStore } from '../../stores/networkStore';
-import { getSpell, MOBILITY_SPELL, MAX_SPELL_SLOTS, isEquippableSpell } from 'shared/spells';
+import { getSpell, MOBILITY_SPELL, DEFENSIVE_SPELL, MAX_SPELL_SLOTS, isEquippableSpell } from 'shared/spells';
+import { getTree, getForkPair } from 'shared/skillTrees';
+import { CLASS_FORK_GROUP, CLASS_LABEL, BRANCH_FLAVOR } from 'shared/classFlavor';
 import type { WebSocketClient } from '../../networking/WebSocketClient';
 import type { SpellDef, WizardClass } from '../../types/game.types';
 import { UIButton } from './UIButton';
 import { SpellTypeIcon, iconKindForSpellId } from './SpellTypeIcon';
 import { SpellCard } from './SpellCard';
-import { WizardPreview } from './WizardPreview';
+import { BattleScene } from './BattleScene';
+import { SkillTreeTab } from './SkillTree';
 import { C2S } from 'shared/events';
 
 const CLASS_COLORS: Record<WizardClass, string> = {
-  fire: '#ff4500', ice: '#a0d8ff', dark: '#cc00ff', sword: '#c8c8c8', earth: '#8B6914',
+  fire: '#ff4500', ice: '#a0d8ff', dark: '#cc00ff', sword: '#c8c8c8', druid: '#5a9e3d', crystalmancer: '#8fd4ff',
 };
+
+const ALL_CLASSES: WizardClass[] = ['fire', 'ice', 'dark', 'sword', 'druid', 'crystalmancer'];
+
+interface ForkNode { id: string; label: string; branch?: string; }
+
+/** Debug subclass switcher (SettingsTab): every class's fork pair, computed once -- getForkPair is static per class/branchGroup. */
+const SUBCLASS_ORDER: { wizardClass: WizardClass; branchGroup: string; pair: ForkNode[] }[] = ALL_CLASSES
+  .map((wizardClass) => {
+    const branchGroup = CLASS_FORK_GROUP[wizardClass];
+    const pair = getForkPair(wizardClass, branchGroup) as ForkNode[] | null;
+    return pair ? { wizardClass, branchGroup, pair } : null;
+  })
+  .filter((x): x is { wizardClass: WizardClass; branchGroup: string; pair: ForkNode[] } => x !== null);
 
 const SKILL_DESCRIPTIONS: Record<string, { label: string; description: string }> = {
   ember_flick:    { label: 'Ember Flick',       description: 'Fast projectile warning shot.' },
@@ -93,38 +109,66 @@ const SKILL_DESCRIPTIONS: Record<string, { label: string; description: string }>
   gods_edge:      { label: "God's Edge",         description: 'Hitscan. Cuts clean. Bypasses Parry.' },
   rune_snare:     { label: 'Snare Rune',         description: 'Place a rune. Detonates on the first enemy to step in it. Damage + stun.' },
   rune_executioner: { label: "Executioner's Rune", description: 'Powerful rune. Massive damage + long stun on trigger.' },
-  pebble_shot:    { label: 'Pebble Shot',        description: 'Small fast rock. Humble. Accurate. Do not underestimate.' },
-  dirt_clod:      { label: 'Dirt Clod',          description: '3-shot scatter burst. 0.18s cooldown. Fires rapidly.' },
-  earthen_skin:   { label: 'Earthen Skin',       description: '-5% damage received. -10% below half HP.' },
-  stone_spire:    { label: 'Stone Spire',        description: 'Erupts at target after 0.4s. Punishes predictability.' },
-  tremor_sense:   { label: 'Tremor Sense',       description: 'Faint footstep vibrations visible through nearby walls.' },
-  rock_wall:      { label: 'Rock Wall',          description: 'Stone wall. Tougher than Ice Wall. 15s duration.' },
-  geologic:       { label: 'Geologic',           description: 'Each cast increases defense. Stacks 4×. Resets on hit.' },
-  avalanche:      { label: 'Avalanche',          description: 'Massive slow boulder. Staggers. Ancient and unstoppable.' },
-  bedrock:        { label: 'Bedrock',            description: 'Standing still 1.5s: +20% damage, reduced spell cost.' },
-  petrify:        { label: 'Petrify',            description: 'Encases enemy in stone 2.5s. Full CC. Long cast.' },
-  fossilize:      { label: 'Fossilize',          description: 'After Petrify breaks, enemy stays slowed 4s.' },
-  fissure:        { label: 'Fissure',            description: 'Split ground in a line. Airborne = +25% damage taken.' },
-  the_deep:       { label: 'The Deep',           description: 'Stone Launch automatically triggers a small Fissure.' },
-  terra_domain:   { label: 'Terra Domain',       description: 'Domain: stone spires erupt randomly. 5s. You are immune.' },
-  tectonic:       { label: 'Tectonic',           description: 'After Terra Domain, Bedrock activates instantly.' },
-  the_monolith:   { label: 'The Monolith',       description: 'Hitscan. Visible 1s before firing. Hits like geology.' },
+  thorn_dart:     { label: 'Thorn Dart',         description: 'Small fast thorn. Humble. Accurate. Do not underestimate.' },
+  seed_burst:     { label: 'Seed Burst',         description: '3-shot scatter burst. 0.18s cooldown. Fires rapidly.' },
+  thick_bark:     { label: 'Thick Bark',         description: '-5% damage received. -10% below half HP.' },
   rune_root:      { label: 'Root Rune',          description: 'Place a rune. Detonates on the first enemy to step in it. Damage + stun.' },
+  spore_pod:      { label: 'Spore Pod',          description: 'Lobbed seed pod. Blooms into a brief entangling root patch.' },
+  bramble_burst:  { label: 'Bramble Burst',      description: 'Thorny eruption at target after 0.4s. Punishes predictability.' },
+  deep_roots:     { label: 'Deep Roots',         description: 'Root network senses movement through nearby walls.' },
+  root_snare:     { label: 'Root Snare',         description: 'Encases enemy in living wood 2.5s. Full CC. Long cast.' },
+  undergrowth:    { label: 'Undergrowth',        description: 'Each cast increases defense. Stacks 4×. Resets on hit.' },
+  overgrowth_ward:{ label: 'Overgrowth Ward',    description: 'Barriers gain +50% health. Bark Ward absorbs more the lower your HP.' },
+  feral_focus:    { label: 'Feral Focus',        description: '+15% damage on Avalanche and Fissure. Offense over defense.' },
+  avalanche:      { label: 'Avalanche',          description: 'Massive rolling boulder. Staggers. Ancient and unstoppable.' },
+  rooted:         { label: 'Rooted',             description: 'Standing still 1.5s: +20% damage, reduced spell cost.' },
+  fissure:        { label: 'Fissure',            description: 'Split ground in a line. Airborne = +25% damage taken.' },
+  overgrown:      { label: 'Overgrown',          description: 'After Root Snare breaks, enemy stays slowed 4s.' },
   rune_seismic:   { label: 'Seismic Rune',       description: 'Powerful rune. Massive damage + stun in a huge radius.' },
+  wildwood_domain:{ label: 'Wildwood Domain',    description: 'Domain: roots erupt randomly. 5s. You are immune.' },
+  overgrowth_pulse: { label: 'Overgrowth Pulse', description: 'Root Launch automatically triggers a small Bramble Burst.' },
+  verdant_lance:  { label: 'Verdant Lance',      description: 'Hitscan. Visible 1s before firing. Hits like a falling tree.' },
+  crystal_shard:  { label: 'Crystal Shard',      description: 'Small fast shard. Humble. Accurate. Do not underestimate.' },
+  shard_burst:    { label: 'Shard Burst',        description: '3-shot scatter burst. 0.18s cooldown. Fires rapidly.' },
+  tremor_sense:   { label: 'Tremor Sense',       description: 'Resonance through the crystal lattice reveals footsteps through nearby walls.' },
+  rune_shard:     { label: 'Shard Rune',         description: 'Place a rune. Detonates on the first enemy to step in it. Damage + stun.' },
+  geode_bomb:     { label: 'Geode Bomb',         description: 'Lobbed crystal. Falls fast and shatters into shrapnel.' },
+  crystal_spire:  { label: 'Crystal Spire',      description: 'Erupts at target after 0.4s. Punishes predictability.' },
+  geologic:       { label: 'Geologic',           description: 'Each cast increases defense. Stacks 4×. Resets on hit.' },
+  crystal_wall:   { label: 'Crystal Wall',       description: 'Crystalline wall. Tougher than Ice Wall. 15s duration.' },
+  resonance:      { label: 'Resonance',          description: 'Consecutive crystal-spell hits build a stacking damage buff. Decays.' },
+  prismatic_ward: { label: 'Prismatic Ward',     description: 'Barriers gain +50% health. Small chance to reflect projectiles.' },
+  shattering_focus: { label: 'Shattering Focus', description: '+15% damage on Geode Bomb and Shard Fracture. Offense over defense.' },
+  petrify:        { label: 'Petrify',            description: 'Encases enemy in crystal 2.5s. Full CC. Long cast.' },
+  fossilize:      { label: 'Fossilize',          description: 'After Petrify breaks, enemy stays slowed 4s.' },
+  shard_fracture: { label: 'Shard Fracture',     description: 'Split ground in a line of shards. Airborne = +25% damage taken.' },
+  prism_field:    { label: 'Prism Field',        description: 'Domain: crystal spires erupt randomly. 5s. You are immune.' },
+  rune_prism:     { label: 'Prism Rune',         description: 'Powerful rune. Massive damage + stun in a huge radius.' },
+  crystalline_growth: { label: 'Crystalline Growth', description: 'After Prism Field, Resonance activates instantly.' },
+  the_monolith:   { label: 'The Monolith',       description: 'Hitscan. Visible 1s before firing. Hits like geology.' },
 };
 
-type Tab = 'spells' | 'glossary' | 'settings';
+type Tab = 'spells' | 'tree' | 'glossary' | 'settings';
+const TAB_LABELS: Record<Tab, string> = { spells: 'Spells', tree: 'Skill Tree', glossary: 'Glossary', settings: 'Settings' };
 
 interface PauseMenuProps {
   ws: WebSocketClient;
   onClose: () => void;
   experimentLabAvailable?: boolean;
   onOpenExperimentLab?: () => void;
+  designLabAvailable?: boolean;
+  onOpenDesignLab?: () => void;
+  /** Controlled from App.tsx so the Tab key can jump straight to the Skill
+   * Tree tab (and Escape can reopen on whatever tab was last showing). */
+  tab: Tab;
+  onTabChange: (t: Tab) => void;
 }
 
-export function PauseMenu({ ws, onClose, experimentLabAvailable, onOpenExperimentLab }: PauseMenuProps) {
+export function PauseMenu({ ws, onClose, experimentLabAvailable, onOpenExperimentLab, designLabAvailable, onOpenDesignLab, tab, onTabChange }: PauseMenuProps) {
   const local = useGameStore((s) => s.local);
-  const [tab, setTab] = useState<Tab>('spells');
+  // Whichever castable spell the user is currently hovering in the Spells
+  // grid or hotbar -- drives the battle preview's casting animation.
+  const [hoveredSpellId, setHoveredSpellId] = useState<string | null>(null);
 
   useEffect(() => {
     if (document.pointerLockElement) document.exitPointerLock();
@@ -134,14 +178,16 @@ export function PauseMenu({ ws, onClose, experimentLabAvailable, onOpenExperimen
   const classColor = wizardClass ? CLASS_COLORS[wizardClass] : '#aaa';
   const mobilitySpellId = wizardClass ? MOBILITY_SPELL[wizardClass] : null;
   const mobilitySpell = mobilitySpellId ? getSpell(mobilitySpellId) : null;
+  const defensiveSpellId = wizardClass ? DEFENSIVE_SPELL[wizardClass] : null;
+  const defensiveSpell = defensiveSpellId ? getSpell(defensiveSpellId) : null;
+  const hoveredSpell = hoveredSpellId ? getSpell(hoveredSpellId) : null;
 
-  const unlockedList = local.unlockedNodes
-    .map(id => ({ id, ...SKILL_DESCRIPTIONS[id] }))
-    .filter(n => n.label);
+  const allNodes = wizardClass ? (getTree(wizardClass) as TreeNode[]) : [];
+  const unlockedSet = new Set(local.unlockedNodes);
+  const revealedSet = new Set(local.revealedLore);
 
-  // Preview's wand gem tracks the currently-selected hotbar slot, same
-  // convention as the in-world model (see WizardPreview.tsx) -- also the
-  // intended hook point for future spell-driven cosmetics.
+  // Preview's wand gem tracks the currently-selected hotbar slot when idle,
+  // same convention as the in-world model -- see BattleScene.tsx.
   const activeSpellId = local.equippedSpells[local.activeSlot] ?? null;
   const gemColor = (activeSpellId ? getSpell(activeSpellId)?.color : null) ?? classColor;
 
@@ -197,10 +243,10 @@ export function PauseMenu({ ws, onClose, experimentLabAvailable, onOpenExperimen
 
       {/* Tabs */}
       <div style={{ display: 'flex', borderBottom: '1px solid #252535', padding: '0 32px', flexShrink: 0 }}>
-        {(['spells', 'glossary', 'settings'] as Tab[]).map(t => (
+        {(['spells', 'tree', 'glossary', 'settings'] as Tab[]).map(t => (
           <UIButton
             key={t}
-            onClick={() => setTab(t)}
+            onClick={() => onTabChange(t)}
             style={{
               background: 'none',
               border: 'none',
@@ -214,53 +260,83 @@ export function PauseMenu({ ws, onClose, experimentLabAvailable, onOpenExperimen
               transition: 'color 0.15s',
             }}
           >
-            {t}
+            {TAB_LABELS[t]}
           </UIButton>
         ))}
       </div>
 
-      {/* Body: tab content (left) + wizard preview (right) */}
+      {/* Body: tab content (left) + battle preview (right, Spells tab only) */}
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-        <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '26px 32px 40px' }}>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           {tab === 'spells' && (
-            <SpellsTab local={local} mobilitySpell={mobilitySpell} mobilitySpellId={mobilitySpellId} classColor={classColor} ws={ws} />
+            <SpellsTab
+              local={local}
+              mobilitySpell={mobilitySpell}
+              mobilitySpellId={mobilitySpellId}
+              defensiveSpell={defensiveSpell}
+              defensiveSpellId={defensiveSpellId}
+              classColor={classColor}
+              ws={ws}
+              onHoverSpell={setHoveredSpellId}
+            />
+          )}
+          {tab === 'tree' && (
+            <div style={{ flex: 1, overflow: 'hidden', padding: '26px 32px 30px', display: 'flex' }}>
+              <SkillTreeTab ws={ws} />
+            </div>
           )}
           {tab === 'glossary' && (
-            <GlossaryTab unlockedList={unlockedList} classColor={classColor} />
+            <div style={{ flex: 1, overflowY: 'auto', padding: '26px 32px 40px' }}>
+              <GlossaryTab
+                allNodes={allNodes}
+                unlockedSet={unlockedSet}
+                revealedSet={revealedSet}
+                skillPoints={local.skillPoints}
+                classColor={classColor}
+                ws={ws}
+              />
+            </div>
           )}
           {tab === 'settings' && (
-            <SettingsTab
-              ws={ws}
-              onClose={onClose}
-              classColor={classColor}
-              experimentLabAvailable={experimentLabAvailable}
-              onOpenExperimentLab={onOpenExperimentLab}
-            />
+            <div style={{ flex: 1, overflowY: 'auto', padding: '26px 32px 40px' }}>
+              <SettingsTab
+                ws={ws}
+                onClose={onClose}
+                classColor={classColor}
+                experimentLabAvailable={experimentLabAvailable}
+                onOpenExperimentLab={onOpenExperimentLab}
+                designLabAvailable={designLabAvailable}
+                onOpenDesignLab={onOpenDesignLab}
+              />
+            </div>
           )}
         </div>
 
-        {/* Wizard preview panel -- also where future cosmetic changes tied to
-            equipped spells will show up. */}
-        <div style={{
-          width: 360,
-          flexShrink: 0,
-          borderLeft: '1px solid #252535',
-          background: 'linear-gradient(180deg, rgba(255,255,255,0.02) 0%, rgba(0,0,0,0.15) 100%)',
-          display: 'flex',
-          flexDirection: 'column',
-        }}>
-          <div style={{ flex: 1, minHeight: 0 }}>
-            <WizardPreview color={classColor} level={local.level} gemColor={gemColor} />
-          </div>
-          <div style={{ padding: '14px 20px 26px', borderTop: '1px solid #1c1c2c', textAlign: 'center', flexShrink: 0 }}>
-            {local.username && (
-              <div style={{ color: '#ddd', fontSize: 13, letterSpacing: 1, marginBottom: 3 }}>{local.username}</div>
-            )}
-            <div style={{ color: classColor, fontSize: 10, letterSpacing: 2, textTransform: 'uppercase' }}>
-              {wizardClass ?? 'Wizard'} · Level {local.level}
+        {/* Battle preview panel -- Spells tab only. Casts whatever spell is
+            hovered (grid or hotbar) at a rotating enemy wizard; also where
+            future cosmetic changes tied to equipped spells will show up. */}
+        {tab === 'spells' && (
+          <div style={{
+            width: 480,
+            flexShrink: 0,
+            borderLeft: '1px solid #252535',
+            background: 'linear-gradient(180deg, rgba(255,255,255,0.02) 0%, rgba(0,0,0,0.15) 100%)',
+            display: 'flex',
+            flexDirection: 'column',
+          }}>
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <BattleScene myClass={wizardClass} hoveredSpell={hoveredSpell} idleGemColor={gemColor} />
+            </div>
+            <div style={{ padding: '14px 20px 26px', borderTop: '1px solid #1c1c2c', textAlign: 'center', flexShrink: 0 }}>
+              {local.username && (
+                <div style={{ color: '#ddd', fontSize: 13, letterSpacing: 1, marginBottom: 3 }}>{local.username}</div>
+              )}
+              <div style={{ color: classColor, fontSize: 10, letterSpacing: 2, textTransform: 'uppercase' }}>
+                {wizardClass ?? 'Wizard'} · Level {local.level}
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
@@ -278,6 +354,8 @@ interface LocalLike {
 const SECTION_HEADER_STYLE = { color: '#aaa', fontSize: 10, letterSpacing: 3, textTransform: 'uppercase' as const, marginBottom: 14 };
 const SLOT_KEY_LABEL_STYLE = { fontSize: 10, letterSpacing: 2, color: '#888', marginBottom: 6, textTransform: 'uppercase' as const };
 
+type TreeNode = { id: string; label: string; tier: number };
+
 interface FlyingState {
   spellId: string;
   spell: SpellDef;
@@ -285,15 +363,19 @@ interface FlyingState {
   to: DOMRect;
 }
 
-function SpellsTab({ local, mobilitySpell, mobilitySpellId, classColor, ws }: {
+function SpellsTab({ local, mobilitySpell, mobilitySpellId, defensiveSpell, defensiveSpellId, classColor, ws, onHoverSpell }: {
   local: LocalLike;
   mobilitySpell: ReturnType<typeof getSpell>;
   mobilitySpellId: string | null;
+  defensiveSpell: ReturnType<typeof getSpell>;
+  defensiveSpellId: string | null;
   classColor: string;
   ws: WebSocketClient;
+  onHoverSpell: (spellId: string | null) => void;
 }) {
   const [selectedSlot, setSelectedSlot] = useState(0);
   const [flying, setFlying] = useState<FlyingState | null>(null);
+  const [dragOverSlot, setDragOverSlot] = useState<number | null>(null);
   const slotRefs = useRef<(HTMLDivElement | null)[]>([]);
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
@@ -304,13 +386,14 @@ function SpellsTab({ local, mobilitySpell, mobilitySpellId, classColor, ws }: {
   // Slots open one-by-one as spells unlock, capped at MAX_SPELL_SLOTS (keys 1-9,0).
   const visibleSlots = Math.min(equippableIds.length, MAX_SPELL_SLOTS);
 
-  function equipSpell(spellId: string | null) {
-    ws.send(C2S.EQUIP_SPELL, { slotIndex: selectedSlot, spellId });
+  function equipInto(slotIndex: number, spellId: string | null) {
+    ws.send(C2S.EQUIP_SPELL, { slotIndex, spellId });
   }
 
-  // Click a card in the grid below: kick off the equip immediately (the real
-  // slot updates whenever the next server tick lands) and, cosmetically, fly
-  // a clone of the card from its grid position over to the target slot.
+  // Click a card in the grid above: equip it into whichever slot is active
+  // and, cosmetically, fly a clone of the card down to that slot. Dragging a
+  // card (below) instead targets whichever slot it's dropped on, regardless
+  // of which one is active.
   function onGridCardClick(spellId: string) {
     const spell = getSpell(spellId);
     if (!spell) return;
@@ -319,129 +402,181 @@ function SpellsTab({ local, mobilitySpell, mobilitySpellId, classColor, ws }: {
     if (fromEl && toEl) {
       setFlying({ spellId, spell, from: fromEl.getBoundingClientRect(), to: toEl.getBoundingClientRect() });
     }
-    equipSpell(spellId);
+    equipInto(selectedSlot, spellId);
+  }
+
+  function onSlotDrop(i: number, e: React.DragEvent) {
+    e.preventDefault();
+    setDragOverSlot(null);
+    const spellId = e.dataTransfer.getData('text/plain');
+    if (!spellId || !getSpell(spellId)) return;
+    equipInto(i, spellId);
+    setSelectedSlot(i);
   }
 
   // Slot keys read 1-9 then 0, matching the "1234567890" top-row layout.
   const slotLabel = (i: number) => (i < 9 ? i + 1 : 0);
 
   return (
-    <div>
-      {/* Hotbar -- a live rendering of the actual HUD spell bar (see SpellBar.tsx).
-          Click a slot to select it, then click a spell below to equip it there. */}
-      <div style={SECTION_HEADER_STYLE}>Your hotbar — click a slot to select it</div>
-      <div style={{ display: 'flex', gap: 14, marginBottom: 18, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-          <div style={SLOT_KEY_LABEL_STYLE}>Shift</div>
-          <SpellCard
-            spellId={mobilitySpellId}
-            spell={mobilitySpell}
-            slotLabel="⇧"
-            cooldownSec={0}
-            cooldownPct={0}
-            width={82}
-            height={106}
-          />
-          {mobilitySpell && (
-            <div style={{ color: '#666', fontSize: 9, marginTop: 6, letterSpacing: 1 }}>{mobilitySpell.cooldown}s cd · mobility</div>
-          )}
-        </div>
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      {/* Unlocked spells -- drag a card onto a hotbar slot below, or hover one
+          to preview its cast, or click it to fly straight into the active slot. */}
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '26px 32px 20px' }}>
+        <div style={SECTION_HEADER_STYLE}>Unlocked spells — drag to a slot, or click to equip into slot {slotLabel(selectedSlot)}</div>
 
-        <div style={{ width: 1, alignSelf: 'stretch', background: '#252535', margin: '0 2px 16px' }} />
-
-        {local.equippedSpells.slice(0, visibleSlots).map((spellId, i) => {
-          const spell = spellId ? getSpell(spellId) : null;
-          return (
-            <div key={i} ref={(el) => { slotRefs.current[i] = el; }} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-              <div style={{ ...SLOT_KEY_LABEL_STYLE, color: selectedSlot === i ? classColor : '#888' }}>{slotLabel(i)}</div>
-              <SpellCard
-                spellId={spellId}
-                spell={spell}
-                slotLabel={String(slotLabel(i))}
-                cooldownSec={0}
-                cooldownPct={0}
-                active={selectedSlot === i}
-                onClick={() => setSelectedSlot(i)}
-                width={92}
-                height={120}
-              />
-            </div>
-          );
-        })}
+        {equippableIds.length === 0 ? (
+          <div style={{ color: '#888', fontSize: 12, fontStyle: 'italic', lineHeight: 1.6 }}>
+            No equippable spells unlocked yet.<br />
+            <span style={{ fontSize: 11 }}>Open the Skill Tree (Tab) and spend skill points.</span>
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(104px, 1fr))', gap: '22px 18px' }}>
+            {equippableIds.map(id => {
+              const spell = getSpell(id);
+              if (!spell) return null;
+              const equippedInSlot = local.equippedSpells.indexOf(id);
+              const isEquipped = equippedInSlot !== -1;
+              const isInSelectedSlot = equippedInSlot === selectedSlot;
+              return (
+                <div
+                  key={id}
+                  ref={(el) => { if (el) cardRefs.current.set(id, el); else cardRefs.current.delete(id); }}
+                  draggable
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData('text/plain', id);
+                    e.dataTransfer.effectAllowed = 'move';
+                  }}
+                  onMouseEnter={() => onHoverSpell(id)}
+                  onMouseLeave={() => onHoverSpell(null)}
+                  style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', opacity: isInSelectedSlot ? 0.45 : 1, cursor: 'grab' }}
+                >
+                  <SpellCard
+                    spellId={id}
+                    spell={spell}
+                    slotLabel=""
+                    cooldownSec={0}
+                    cooldownPct={0}
+                    active={isEquipped}
+                    onClick={() => onGridCardClick(id)}
+                    width={104}
+                    height={136}
+                  />
+                  <div style={{ marginTop: 7, textAlign: 'center' }}>
+                    <div style={{ color: '#777', fontSize: 10 }}>
+                      {spell.damage > 0 && <span style={{ marginRight: 8 }}>{spell.damage} dmg</span>}
+                      {spell.cooldown > 0 && <span>{spell.cooldown}s cd</span>}
+                    </div>
+                    {spell.statusEffect && <div style={{ color: '#aa88ff', fontSize: 9, marginTop: 1 }}>+{spell.statusEffect}</div>}
+                    {isEquipped && (
+                      <div style={{ color: classColor, fontSize: 9, letterSpacing: 1, marginTop: 3 }}>
+                        ✓ slot {equippedInSlot < 9 ? equippedInSlot + 1 : 0}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
-      {/* Unequip button */}
-      {local.equippedSpells[selectedSlot] ? (
-        <UIButton
-          onClick={() => equipSpell(null)}
-          style={{
-            padding: '4px 12px',
-            background: 'rgba(120,0,0,0.18)',
-            border: '1px solid #660000',
-            borderRadius: 3,
-            color: '#ff8888',
-            fontSize: 10,
-            letterSpacing: 2,
-            cursor: 'pointer',
-            marginBottom: 26,
-            textTransform: 'uppercase',
-          }}
-        >
-          Clear slot {slotLabel(selectedSlot)}
-        </UIButton>
-      ) : (
-        <div style={{ marginBottom: 26 }} />
-      )}
+      {/* Hotbar -- pinned to the bottom like the real HUD spell bar (see
+          SpellBar.tsx), so it's always reachable as a drop target no matter
+          how far the grid above is scrolled. Click a slot to make it active. */}
+      <div style={{ flexShrink: 0, borderTop: '1px solid #252535', background: 'rgba(0,0,0,0.22)', padding: '16px 32px 20px' }}>
+        <div style={{ ...SECTION_HEADER_STYLE, marginBottom: 12 }}>Your hotbar</div>
+        <div style={{ display: 'flex', gap: 14, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+            <div style={SLOT_KEY_LABEL_STYLE}>Shift</div>
+            <SpellCard
+              spellId={mobilitySpellId}
+              spell={mobilitySpell}
+              slotLabel="⇧"
+              cooldownSec={0}
+              cooldownPct={0}
+              width={82}
+              height={106}
+            />
+            {mobilitySpell && (
+              <div style={{ color: '#666', fontSize: 9, marginTop: 6, letterSpacing: 1 }}>{mobilitySpell.cooldown}s cd · mobility</div>
+            )}
+          </div>
 
-      {/* Unlocked spells grid */}
-      <div style={SECTION_HEADER_STYLE}>Unlocked spells — click to equip into slot {slotLabel(selectedSlot)}</div>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+            <div style={SLOT_KEY_LABEL_STYLE}>Q</div>
+            <SpellCard
+              spellId={defensiveSpellId}
+              spell={defensiveSpell}
+              slotLabel="Q"
+              cooldownSec={0}
+              cooldownPct={0}
+              width={82}
+              height={106}
+            />
+            {defensiveSpell && (
+              <div style={{ color: '#666', fontSize: 9, marginTop: 6, letterSpacing: 1 }}>{defensiveSpell.cooldown}s cd · defensive</div>
+            )}
+          </div>
 
-      {equippableIds.length === 0 ? (
-        <div style={{ color: '#888', fontSize: 12, fontStyle: 'italic', lineHeight: 1.6 }}>
-          No equippable spells unlocked yet.<br />
-          <span style={{ fontSize: 11 }}>Open the Skill Tree (Tab) and spend skill points.</span>
-        </div>
-      ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(104px, 1fr))', gap: '22px 18px' }}>
-          {equippableIds.map(id => {
-            const spell = getSpell(id);
-            if (!spell) return null;
-            const equippedInSlot = local.equippedSpells.indexOf(id);
-            const isEquipped = equippedInSlot !== -1;
-            const isInSelectedSlot = equippedInSlot === selectedSlot;
+          <div style={{ width: 1, alignSelf: 'stretch', background: '#252535', margin: '0 2px 16px' }} />
+
+          {local.equippedSpells.slice(0, visibleSlots).map((spellId, i) => {
+            const spell = spellId ? getSpell(spellId) : null;
             return (
               <div
-                key={id}
-                ref={(el) => { if (el) cardRefs.current.set(id, el); else cardRefs.current.delete(id); }}
-                style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', opacity: isInSelectedSlot ? 0.45 : 1 }}
+                key={i}
+                ref={(el) => { slotRefs.current[i] = el; }}
+                onDragOver={(e) => { e.preventDefault(); setDragOverSlot(i); }}
+                onDragLeave={() => setDragOverSlot((s) => (s === i ? null : s))}
+                onDrop={(e) => onSlotDrop(i, e)}
+                onMouseEnter={() => spellId && onHoverSpell(spellId)}
+                onMouseLeave={() => onHoverSpell(null)}
+                style={{
+                  display: 'flex', flexDirection: 'column', alignItems: 'center',
+                  padding: 4, borderRadius: 6,
+                  outline: dragOverSlot === i ? `2px dashed ${classColor}` : '2px dashed transparent',
+                  outlineOffset: 2,
+                  transition: 'outline-color 120ms',
+                }}
               >
+                <div style={{ ...SLOT_KEY_LABEL_STYLE, color: selectedSlot === i ? classColor : '#888' }}>{slotLabel(i)}</div>
                 <SpellCard
-                  spellId={id}
+                  spellId={spellId}
                   spell={spell}
-                  slotLabel=""
+                  slotLabel={String(slotLabel(i))}
                   cooldownSec={0}
                   cooldownPct={0}
-                  onClick={() => onGridCardClick(id)}
-                  width={104}
-                  height={136}
+                  active={selectedSlot === i}
+                  onClick={() => setSelectedSlot(i)}
+                  width={92}
+                  height={120}
                 />
-                <div style={{ marginTop: 7, textAlign: 'center' }}>
-                  <div style={{ color: '#777', fontSize: 10 }}>
-                    {spell.damage > 0 && <span style={{ marginRight: 8 }}>{spell.damage} dmg</span>}
-                    {spell.cooldown > 0 && <span>{spell.cooldown}s cd</span>}
-                  </div>
-                  {spell.statusEffect && <div style={{ color: '#aa88ff', fontSize: 9, marginTop: 1 }}>+{spell.statusEffect}</div>}
-                  {isEquipped && (
-                    <div style={{ color: classColor, fontSize: 9, letterSpacing: 1, marginTop: 3 }}>
-                      ✓ slot {equippedInSlot < 9 ? equippedInSlot + 1 : 0}
-                    </div>
-                  )}
-                </div>
               </div>
             );
           })}
+
+          {local.equippedSpells[selectedSlot] && (
+            <UIButton
+              onClick={() => equipInto(selectedSlot, null)}
+              style={{
+                padding: '6px 12px',
+                background: 'rgba(120,0,0,0.18)',
+                border: '1px solid #660000',
+                borderRadius: 3,
+                color: '#ff8888',
+                fontSize: 10,
+                letterSpacing: 2,
+                cursor: 'pointer',
+                textTransform: 'uppercase',
+                marginBottom: 14,
+                flexShrink: 0,
+              }}
+            >
+              Clear slot {slotLabel(selectedSlot)}
+            </UIButton>
+          )}
         </div>
-      )}
+      </div>
 
       {flying && (
         <FlyingCard
@@ -493,63 +628,152 @@ function FlyingCard({ spellId, spell, from, to, onDone }: {
       }}
       onTransitionEnd={onDone}
     >
-      <SpellCard spellId={spellId} spell={spell} slotLabel="" cooldownSec={0} cooldownPct={0} width={from.width} height={from.height} />
+      {/* fixedSize: this card is sized from a measured rect and tweened onto
+          another one, so it must honour width/height exactly -- letting
+          rarity scale it here would desync the flight from its target. */}
+      <SpellCard spellId={spellId} spell={spell} slotLabel="" cooldownSec={0} cooldownPct={0} width={from.width} height={from.height} fixedSize />
     </div>
   );
 }
 
-function GlossaryTab({ unlockedList, classColor }: {
-  unlockedList: { id: string; label: string; description: string }[];
+function GlossaryTab({ allNodes, unlockedSet, revealedSet, skillPoints, classColor, ws }: {
+  allNodes: TreeNode[];
+  unlockedSet: Set<string>;
+  revealedSet: Set<string>;
+  skillPoints: number;
   classColor: string;
+  ws: WebSocketClient;
 }) {
-  if (unlockedList.length === 0) {
+  const addRevealedLore = useGameStore((s) => s.addRevealedLore);
+
+  if (allNodes.length === 0) {
     return (
       <div style={{ color: '#bbb', fontSize: 13, textAlign: 'center', marginTop: 32, letterSpacing: 1 }}>
-        Nothing unlocked yet.<br />
-        <span style={{ fontSize: 11, color: '#888', marginTop: 8, display: 'block' }}>
-          Open the Skill Tree (Tab) and spend your skill points.
-        </span>
+        Choose a class to begin your studies.
       </div>
     );
   }
 
+  function reveal(nodeId: string) {
+    if (skillPoints <= 0) return;
+    ws.send(C2S.REVEAL_LORE, { nodeId });
+    addRevealedLore(nodeId);
+  }
+
+  const known = allNodes.filter((n) => unlockedSet.has(n.id) || revealedSet.has(n.id));
+  const unstudied = allNodes.filter((n) => !unlockedSet.has(n.id) && !revealedSet.has(n.id));
+
   return (
     <div>
-      <div style={{ color: '#aaa', fontSize: 10, letterSpacing: 3, textTransform: 'uppercase', marginBottom: 14 }}>
-        Unlocked — {unlockedList.length} node{unlockedList.length !== 1 ? 's' : ''}
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', columnGap: 32 }}>
-        {unlockedList.map(({ id, label, description }) => {
-          const kind = iconKindForSpellId(id);
-          return (
-            <div key={id} style={{ padding: '10px 0', borderBottom: '1px solid #1c1c2c' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
-                <div style={{ color: classColor, fontSize: 12 }}>{label}</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 3, color: '#777' }}>
+      <div style={SECTION_HEADER_STYLE}>Known — {known.length} of {allNodes.length}</div>
+
+      {known.length === 0 ? (
+        <div style={{ color: '#888', fontSize: 12, fontStyle: 'italic', lineHeight: 1.6, marginBottom: 32 }}>
+          Nothing studied yet.<br />
+          <span style={{ fontSize: 11 }}>Unlock spells in the Skill Tree (Tab), or spend a point below to study one early.</span>
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '24px 20px', marginBottom: 36 }}>
+          {known.map(({ id }) => {
+            const spell = getSpell(id);
+            const meta = SKILL_DESCRIPTIONS[id];
+            const label = meta?.label ?? id;
+            const description = meta?.description ?? '';
+            const kind = iconKindForSpellId(id);
+            const isUnlocked = unlockedSet.has(id);
+            return (
+              <div
+                key={id}
+                style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}
+              >
+                <SpellCard
+                  spellId={id}
+                  spell={spell}
+                  displayName={label}
+                  accentColor={classColor}
+                  slotLabel=""
+                  cooldownSec={0}
+                  cooldownPct={0}
+                  width={108}
+                  height={140}
+                />
+                <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 4 }}>
                   <SpellTypeIcon kind={kind} size={10} color="#777" />
-                  <span style={{ fontSize: 9, letterSpacing: 1, textTransform: 'uppercase' }}>{kind}</span>
+                  <span style={{ fontSize: 9, letterSpacing: 1, textTransform: 'uppercase', color: isUnlocked ? classColor : '#8fdb8f' }}>
+                    {isUnlocked ? 'unlocked' : 'studied'}
+                  </span>
                 </div>
+                <div style={{ color: '#bbb', fontSize: 11, lineHeight: 1.5, marginTop: 4 }}>{description}</div>
               </div>
-              <div style={{ color: '#bbb', fontSize: 11, lineHeight: 1.5 }}>{description}</div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
+
+      {unstudied.length > 0 && (
+        <>
+          <div style={SECTION_HEADER_STYLE}>Unstudied Knowledge — {unstudied.length} entr{unstudied.length !== 1 ? 'ies' : 'y'}</div>
+          <div style={{ color: '#777', fontSize: 11, marginBottom: 18, lineHeight: 1.5, maxWidth: 560 }}>
+            Spend a skill point to study a spell before you've unlocked it — reveals what it does without equipping it. Very wizard of you.
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: '20px 16px' }}>
+            {unstudied.map(({ id }) => (
+              <UnstudiedCard key={id} nodeId={id} classColor={classColor} canAfford={skillPoints > 0} onReveal={() => reveal(id)} />
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
 
-function SettingsTab({ ws, onClose, classColor, experimentLabAvailable, onOpenExperimentLab }: {
+/** A locked glossary entry: blurred spell-card silhouette with a "spend 1 skill point" overlay button, guarding what's studied vs. still a mystery. */
+function UnstudiedCard({ nodeId, classColor, canAfford, onReveal }: {
+  nodeId: string;
+  classColor: string;
+  canAfford: boolean;
+  onReveal: () => void;
+}) {
+  return (
+    <div style={{ position: 'relative', width: '100%', maxWidth: 120 }}>
+      <div style={{ filter: 'blur(6px)', pointerEvents: 'none', opacity: 0.7 }}>
+        <SpellCard spellId={nodeId} spell={null} displayName="?" accentColor="#555" slotLabel="" cooldownSec={0} cooldownPct={0} width={120} height={140} />
+      </div>
+      <UIButton
+        onClick={onReveal}
+        disabled={!canAfford}
+        style={{
+          position: 'absolute', inset: 0,
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4,
+          background: 'rgba(4,4,10,0.45)',
+          border: `1px dashed ${canAfford ? classColor : '#444'}`,
+          borderRadius: 4,
+          color: canAfford ? classColor : '#666',
+          fontSize: 9, letterSpacing: 1, textTransform: 'uppercase',
+          cursor: canAfford ? 'pointer' : 'not-allowed',
+        }}
+      >
+        <span style={{ fontSize: 18 }}>?</span>
+        <span>1 skill point</span>
+      </UIButton>
+    </div>
+  );
+}
+
+function SettingsTab({ ws, onClose, classColor, experimentLabAvailable, onOpenExperimentLab, designLabAvailable, onOpenDesignLab }: {
   ws: WebSocketClient;
   onClose: () => void;
   classColor: string;
   experimentLabAvailable?: boolean;
   onOpenExperimentLab?: () => void;
+  designLabAvailable?: boolean;
+  onOpenDesignLab?: () => void;
 }) {
   const [muted, setMuted] = useState(false);
   const debugMode = useGameStore((s) => s.debugMode);
   const setDebugMode = useGameStore((s) => s.setDebugMode);
   const players = useGameStore((s) => s.players);
+  const local = useGameStore((s) => s.local);
   const roomId = useNetworkStore((s) => s.roomId);
   const inExperiment = !!roomId && roomId.startsWith('experiment-');
   const experimentBotCount = inExperiment ? Object.values(players).filter((p) => p.isBot).length : 0;
@@ -559,13 +783,19 @@ function SettingsTab({ ws, onClose, classColor, experimentLabAvailable, onOpenEx
     if (v) ws.send(C2S.DEBUG_GRANT, {});
   }
 
+  const flavorMap = BRANCH_FLAVOR as unknown as Record<string, Record<string, { symbol: string; title: string }>>;
+
+  function switchSubclass(wizardClass: WizardClass, branch: string) {
+    ws.send(C2S.DEBUG_SET_BRANCH, { class: wizardClass, branch });
+  }
+
   function disconnect() {
     ws.disconnect();
     window.location.reload();
   }
 
   return (
-    <div style={{ maxWidth: 640 }}>
+    <div style={{ maxWidth: 640, margin: '0 auto' }}>
       <div style={{ color: '#aaa', fontSize: 10, letterSpacing: 3, textTransform: 'uppercase', marginBottom: 20 }}>
         Settings
       </div>
@@ -580,6 +810,47 @@ function SettingsTab({ ws, onClose, classColor, experimentLabAvailable, onOpenEx
         classColor="#ffcc00"
         hint="Unlocks all skill tree nodes. Grants 999 points."
       />
+
+      {debugMode && (
+        <div style={{ padding: '8px 0', borderBottom: '1px solid #1a1a28' }}>
+          <div style={{ color: '#ccc', fontSize: 12, marginBottom: 6 }}>Subclasses</div>
+          {SUBCLASS_ORDER.map(({ wizardClass, branchGroup, pair }) => {
+            const color = CLASS_COLORS[wizardClass];
+            return (
+              <div key={wizardClass} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <div style={{ width: 44, flexShrink: 0, color, fontSize: 10, letterSpacing: 1, textTransform: 'uppercase' }}>
+                  {CLASS_LABEL[wizardClass]}
+                </div>
+                <div style={{ display: 'flex', gap: 8, flex: 1 }}>
+                  {pair.map((node) => {
+                    const branch = node.branch as string;
+                    const flavor = flavorMap[branchGroup]?.[branch];
+                    const active = local.class === wizardClass && local.divergedBranch[branchGroup] === branch;
+                    return (
+                      <UIButton
+                        key={branch}
+                        onClick={() => switchSubclass(wizardClass, branch)}
+                        style={{
+                          flex: 1, padding: '6px 10px',
+                          background: active ? `${color}22` : 'rgba(255,255,255,0.03)',
+                          border: `1px solid ${active ? color : '#333'}`,
+                          borderRadius: 3, color: active ? color : '#ccc',
+                          fontSize: 11, letterSpacing: 1, cursor: 'pointer', textTransform: 'uppercase',
+                        }}
+                      >
+                        {flavor ? `${flavor.symbol} ${flavor.title}` : node.label}
+                      </UIButton>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+          <div style={{ color: '#888', fontSize: 10, marginTop: 4, letterSpacing: 1 }}>
+            Switches your class/loadout live -- stays alive, no respawn.
+          </div>
+        </div>
+      )}
 
       {/* Bots */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #1a1a28' }}>
@@ -625,6 +896,27 @@ function SettingsTab({ ws, onClose, classColor, experimentLabAvailable, onOpenEx
             }}
           >
             {inExperiment ? 'Resume' : 'Enter'}
+          </UIButton>
+        </div>
+      )}
+
+      {/* Design Lab */}
+      {designLabAvailable && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #1a1a28' }}>
+          <div>
+            <div style={{ color: '#ccc', fontSize: 12 }}>Design Lab</div>
+            <div style={{ color: '#888', fontSize: 10, marginTop: 2 }}>
+              Generate, browse and assign spell card looks (localhost only)
+            </div>
+          </div>
+          <UIButton
+            onClick={() => onOpenDesignLab?.()}
+            style={{
+              padding: '5px 10px', background: 'rgba(120,80,200,0.15)', border: '1px solid #4a3a7b',
+              borderRadius: 3, color: '#b98cff', fontSize: 10, letterSpacing: 1, cursor: 'pointer', textTransform: 'uppercase', flexShrink: 0,
+            }}
+          >
+            Enter
           </UIButton>
         </div>
       )}

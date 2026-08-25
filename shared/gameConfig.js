@@ -40,7 +40,16 @@ export const DOMAIN_CONFIGS = {
     effect: 'time_slow',
     otherSpeedMultiplier: 0.15,
   },
-  terra_domain: {
+  wildwood_domain: {
+    duration: 5000,
+    telegraph: 1500,
+    cooldown: 80000,
+    effect: 'stone_spires',
+    ownerSpeedMultiplier: 1.0,
+    otherSpeedMultiplier: 0.8,
+    spireCount: 12,
+  },
+  prism_field: {
     duration: 5000,
     telegraph: 1500,
     cooldown: 80000,

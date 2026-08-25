@@ -15,15 +15,16 @@ import { localOrientation } from '../../networking/localOrientation';
 import { PLAYER_HEIGHT } from 'shared/constants';
 import { hatScaleForLevel } from 'shared/leveling';
 import { ArmAndWand } from './ArmAndWand';
+import { SwordBuffShards } from './SwordBuffShards';
 import { useCastAnimation } from '../../hooks/useCastAnimation';
-import { getSpell } from 'shared/spells';
+import { getSpell, DEFENSIVE_SPELL } from 'shared/spells';
 
 const HAT_CONE_RADIUS = 0.28;
 const HAT_CONE_HEIGHT = 0.5;
 const HAT_BASE_LOCAL_Y = 1.95;
 
 const CLASS_COLORS: Record<string, string> = {
-  fire: '#ff4500', ice: '#a0d8ff', dark: '#6600cc', sword: '#c8c8c8', earth: '#8B6914', default: '#888888',
+  fire: '#ff4500', ice: '#a0d8ff', dark: '#6600cc', sword: '#c8c8c8', druid: '#5a9e3d', crystalmancer: '#8fd4ff', default: '#888888',
 };
 
 export function LocalPlayerModel() {
@@ -51,6 +52,19 @@ export function LocalPlayerModel() {
   const activeSpellId = useGameStore((s) => s.local.equippedSpells[s.local.activeSlot] ?? null);
   const gemColor = (activeSpellId ? getSpell(activeSpellId)?.color : null) ?? color;
 
+  // Defensive spell (Q) visual cue: one plain translucent shell, no light --
+  // exactly the "single entity, no light" shape lag-heavy multi-entity spell
+  // effects should have followed all along (see ProjectileSpell.tsx).
+  const defensiveActive = useGameStore((s) => s.local.defensiveActive);
+  const defensiveSpellId = local.class ? DEFENSIVE_SPELL[local.class] : null;
+  const defensiveGlow = defensiveSpellId ? getSpell(defensiveSpellId)?.glowColor : null;
+
+  // Parry / Phantom Blade have no visual of their own server-side (pure
+  // state flags) -- reflect them here instead of adding a whole new
+  // world-space effect system just for two spells.
+  const parryActive = useGameStore((s) => s.local.parryActive);
+  const phantomCasts = useGameStore((s) => s.local.phantomCasts);
+
   return (
     <group ref={groupRef}>
       <mesh position={[0, 0.9, 0]} castShadow>
@@ -71,6 +85,17 @@ export function LocalPlayerModel() {
       </group>
 
       <pointLight position={[0, 1.5, 0]} intensity={0.5} distance={3} color={color} />
+
+      {defensiveActive && defensiveGlow && (
+        <mesh position={[0, 1.0, 0]}>
+          <sphereGeometry args={[1.05, 16, 12]} />
+          <meshBasicMaterial color={defensiveGlow} transparent opacity={0.22} depthWrite={false} />
+        </mesh>
+      )}
+
+      {local.class === 'sword' && (
+        <SwordBuffShards color={color} parryActive={parryActive} phantomCasts={phantomCasts} />
+      )}
 
       <ArmAndWand color={color} gemColor={gemColor} castAnimRef={castAnimRef} />
     </group>

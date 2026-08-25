@@ -20,6 +20,7 @@ const LABELS: Record<IconKind, string> = {
   melee: 'Melee — close range, must swing at your foe',
   hitscan: 'Hitscan — instant, requires a clear line of sight',
   projectile: 'Projectile — travels through the air, can be dodged or timed',
+  arc: 'Arc — lobbed, falls under gravity, so aim high for distance',
   aoe: 'Area of effect — damages everyone in a zone',
   domain: 'Domain — arena-wide ultimate effect',
   beam: 'Beam — continuous channeled damage',
@@ -27,6 +28,7 @@ const LABELS: Record<IconKind, string> = {
   mobility: 'Mobility — movement ability',
   passive: 'Passive — always-on effect, not cast',
   rune: 'Rune — placed on the ground, detonates on the first enemy to step in it',
+  defensive: 'Defensive — Q. One per class: a shield, barrier, or counter.',
 };
 
 interface Props {
@@ -90,6 +92,13 @@ function glyph(kind: IconKind) {
           <path d="M11 7h6v6" />
         </>
       );
+    case 'arc': // lobbed trajectory -- rises, then falls onto the target
+      return (
+        <>
+          <path d="M2.5 20.5 C5.5 6.5, 15 3.5, 20 12.5" />
+          <circle cx="20.5" cy="13.5" r="2.2" fill="currentColor" stroke="none" />
+        </>
+      );
     case 'aoe': // bomb
       return (
         <>
@@ -134,6 +143,10 @@ function glyph(kind: IconKind) {
           <path d="M12 2.5l8 9.5-8 9.5-8-9.5z" />
           <circle cx="12" cy="12" r="2.6" />
         </>
+      );
+    case 'defensive': // shield
+      return (
+        <path d="M12 2.5l8 3.2v6.3c0 5-3.4 8.4-8 9.5-4.6-1.1-8-4.5-8-9.5V5.7z" />
       );
     case 'passive':
     default: // star

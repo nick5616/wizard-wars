@@ -23,23 +23,21 @@ interface SkillNode {
 
 const SKILL_TREES = SHARED_SKILL_TREES as Record<WizardClass, SkillNode[]>;
 
-interface SkillTreeProps {
+interface SkillTreeTabProps {
   ws: WebSocketClient;
-  onClose: () => void;
 }
 
 const CLASS_COLORS: Record<WizardClass, string> = {
-  fire: '#ff4500', ice: '#a0d8ff', dark: '#cc00ff', sword: '#c8c8c8', earth: '#8B6914',
+  fire: '#ff4500', ice: '#a0d8ff', dark: '#cc00ff', sword: '#c8c8c8', druid: '#5a9e3d', crystalmancer: '#8fd4ff',
 };
 
-export function SkillTree({ ws, onClose }: SkillTreeProps) {
+/** Embedded in the pause menu's "Skill Tree" tab (see PauseMenu.tsx) -- no
+ * longer its own fullscreen overlay, so it has no close/click-outside chrome
+ * of its own; the pause menu's ESC button and Escape/Tab keys own that. */
+export function SkillTreeTab({ ws }: SkillTreeTabProps) {
   const { local, addUnlockedNode, debugMode } = useGameStore();
   const wizardClass = local.class;
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (document.pointerLockElement) document.exitPointerLock();
-  }, []);
 
   if (!wizardClass) return null;
 
@@ -72,47 +70,26 @@ export function SkillTree({ ws, onClose }: SkillTreeProps) {
   const hoveredSpell = hovered ? (ALL_SPELLS as Record<string, typeof ALL_SPELLS[keyof typeof ALL_SPELLS]>)[hovered.id] ?? null : null;
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.88)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 400,
-        fontFamily: "'Courier New', monospace",
-      }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) {
-          onClose();
-          setTimeout(() => {
-            const canvas = document.querySelector('canvas');
-            if (canvas && !document.pointerLockElement) canvas.requestPointerLock();
-          }, 50);
-        }
-      }}
-    >
-      <div style={{
-        display: 'flex',
-        gap: 0,
-        background: 'rgba(6,6,16,0.98)',
-        border: `1px solid ${color}33`,
-        borderRadius: 6,
-        overflow: 'hidden',
-        maxHeight: '88vh',
-        width: 820,
-      }}>
+    <div style={{
+      display: 'flex',
+      flex: 1,
+      minWidth: 0,
+      gap: 0,
+      background: 'rgba(6,6,16,0.6)',
+      border: `1px solid ${color}33`,
+      borderRadius: 6,
+      overflow: 'hidden',
+    }}>
 
-        {/* ── Left: description panel ─────────────────────────────────── */}
-        <div style={{
-          width: 280,
-          flexShrink: 0,
-          borderRight: `1px solid #1a1a2e`,
-          display: 'flex',
-          flexDirection: 'column',
-          padding: '24px 20px',
-        }}>
+      {/* ── Left: description panel ─────────────────────────────────── */}
+      <div style={{
+        width: 280,
+        flexShrink: 0,
+        borderRight: `1px solid #1a1a2e`,
+        display: 'flex',
+        flexDirection: 'column',
+        padding: '24px 20px',
+      }}>
           {/* Header */}
           <div style={{ marginBottom: 24 }}>
             <div style={{ color: color, fontSize: 11, letterSpacing: 5, textTransform: 'uppercase', marginBottom: 4 }}>
@@ -266,11 +243,6 @@ export function SkillTree({ ws, onClose }: SkillTreeProps) {
               </div>
             </div>
           )}
-
-          {/* Footer */}
-          <div style={{ color: '#666', fontSize: 10, letterSpacing: 2, marginTop: 16, paddingTop: 12, borderTop: '1px solid #222' }}>
-            Tab or click outside to close
-          </div>
         </div>
 
         {/* ── Right: tree SVG ─────────────────────────────────────────── */}
@@ -342,6 +314,5 @@ export function SkillTree({ ws, onClose }: SkillTreeProps) {
           </svg>
         </div>
       </div>
-    </div>
   );
 }

@@ -7,9 +7,10 @@ import { Player } from './Player.js';
  * lookup unmodified — bots are just Players with ws: null and a controller.
  */
 export class Bot extends Player {
-  constructor({ id, username, class: wizardClass, behavior = 'aggressive', autoEquipOnLevel = true }) {
+  constructor({ id, username, class: wizardClass, behavior = 'aggressive', autoEquipOnLevel = true, team = null }) {
     super({ id, ws: null, username });
     this.isBot = true;
+    this.team = team;
     this.behavior = behavior; // 'static' | 'docile' | 'aggressive'
     // Whether ProgressionSystem.tryAutoUnlock runs for this bot on kill (see
     // Room.js's kill handler) -- on by default, matching how every human

@@ -1,11 +1,11 @@
 /**
- * A spell rendered as a stylized card instead of a plain colored box: a
- * per-school frame silhouette (clip-path), a procedurally-seeded background
- * pattern unique to the spell (so two fire spells don't look identical to
- * each other, just related), and -- deliberately minimal -- just the name
- * and a glowing type glyph in the center. Design tokens live in
- * data/spellCardThemes.json; the frame shapes themselves are in
- * data/cardFrames.ts.
+ * A spell rendered as a stylized card. Everything about how the card *looks*
+ * -- silhouette, fill, engraved texture, live particles, sigil ring, corner
+ * ornament, aura -- comes from a CardRecipe (see data/cardRecipe.ts), either
+ * assigned by hand in the Design Lab or generated deterministically from the
+ * spell's tier. The point of routing it through a recipe is that ornament
+ * scales with power, so a late-game hotbar sorts itself visually: tier-1
+ * cards are plain and still, capstones are worked and alive.
  *
  * The card is a real 3D flip: casting rotates it face-down onto a greyscale
  * back face that floods back to full color (bottom-up) as the cooldown
@@ -19,40 +19,16 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { SpellDef } from '../../types/game.types';
 import { SpellTypeIcon, iconKindForSpellId } from './SpellTypeIcon';
 import { legibleAccent } from '../../utils/legibleColor';
-import { seedFromString, seededRandom } from '../../utils/cardSeed';
-import { CARD_FRAME_CLIP, DEFAULT_FRAME_CLIP } from '../../data/cardFrames';
-import cardThemes from '../../data/spellCardThemes.json';
-
-interface SchoolTheme { frame: string; cornerGlyph: string; patternSalt: number; }
-
-const SCHOOLS = cardThemes.schools as Record<string, SchoolTheme>;
+import { seedFromString } from '../../utils/cardSeed';
+import { frameClip, frameInset } from '../../data/cardFrames';
+import { NULL_RECIPE, cardScale, type CardRecipe } from '../../data/cardRecipe';
+import { useSpellRecipe } from '../../stores/cardRecipeStore';
+import { CardFace, CardSigil, auraFilter, nameStyle, useCardPalette } from './CardArt';
 
 const SNAPPY = 'cubic-bezier(0.34, 1.56, 0.64, 1)'; // "back out" -- slight overshoot, settles fast
 const GREY_BG = '#2b2b31';
-const GREY_LINE = '#5a5a64';
 const GREY_ICON = '#7a7a86';
 const GREY_FRAME = '#4a4a54';
-
-interface DecoLine { x1: number; y1: number; x2: number; y2: number; opacity: number; }
-
-/** A handful of thin diagonal accent lines, positioned deterministically from the spell's own id -- stable across renders, distinct per spell. */
-function buildPattern(seed: number): DecoLine[] {
-  const rand = seededRandom(seed);
-  const count = 4 + Math.floor(rand() * 3); // 4-6
-  const lines: DecoLine[] = [];
-  for (let i = 0; i < count; i++) {
-    const x1 = rand() * 100, y1 = rand() * 100;
-    const len = 15 + rand() * 35;
-    const angle = rand() * Math.PI * 2;
-    lines.push({
-      x1, y1,
-      x2: x1 + Math.cos(angle) * len,
-      y2: y1 + Math.sin(angle) * len,
-      opacity: 0.12 + rand() * 0.18,
-    });
-  }
-  return lines;
-}
 
 export interface SpellCardProps {
   spellId: string | null;
@@ -64,29 +40,61 @@ export interface SpellCardProps {
   onClick?: () => void;
   width?: number;
   height?: number;
+  /** Label to show for a non-castable skill-tree node (a passive) that has
+   * no SpellDef -- e.g. glossary entries. Ignored when `spell` is set. */
+  displayName?: string;
+  /** Icon/glow color for a `displayName` card, since passives have no
+   * SpellDef color of their own -- typically the wizard's class color. */
+  accentColor?: string;
+  /** Force a specific look instead of the spell's assigned/generated one.
+   * Used by the Design Lab to preview a candidate recipe. */
+  recipeOverride?: CardRecipe;
+  /** Replace the card's name text. The Design Lab shows the *recipe's* name
+   * here, since in the lab a card is a look rather than a spell. */
+  labelOverride?: string;
+  /** Preview mode: render as though hovered, so motion and aura are visible
+   * without the pointer being over the card. */
+  forceLit?: boolean;
+  /** Opt out of rarity-driven sizing and use `width`/`height` exactly. For
+   * grids that need even columns (the Design Lab, the skill tree) where a
+   * mythic growing 38% would break the layout. */
+  fixedSize?: boolean;
 }
 
-export function SpellCard({ spellId, spell, slotLabel, cooldownSec, cooldownPct, active, onClick, width = 92, height = 120 }: SpellCardProps) {
+export function SpellCard({
+  spellId, spell, slotLabel, cooldownSec, cooldownPct, active, onClick,
+  width: baseWidth = 92, height: baseHeight = 120, displayName, accentColor,
+  recipeOverride, labelOverride, forceLit, fixedSize,
+}: SpellCardProps) {
   const [hovered, setHovered] = useState(false);
   const [justCast, setJustCast] = useState(false);
   const prevOnCooldown = useRef(false);
 
-  const school = spell?.school ? SCHOOLS[spell.school] : null;
-  const clipPath = school ? (CARD_FRAME_CLIP[school.frame] ?? DEFAULT_FRAME_CLIP) : DEFAULT_FRAME_CLIP;
+  const resolved = useSpellRecipe(spellId, spell);
+  const recipe = recipeOverride ?? resolved ?? NULL_RECIPE;
+
   const kind = spellId ? iconKindForSpellId(spellId) : 'passive';
+  const label = labelOverride ?? spell?.name ?? displayName ?? null;
 
-  const color = spell ? spell.color : '#333';
-  const glow = spell ? spell.glowColor : '#333';
-  const textColor = spell ? legibleAccent(color, glow) : '#666';
+  // Rarity buys footprint: a mythic card is meaningfully bigger than a
+  // tier-1 starter sitting next to it in the hotbar, which is a power tell
+  // that lands before you've read anything. It also pays for the longer
+  // names and more deeply cusped frames that high grades come with.
+  const inset = frameInset(recipe.frame);
+  const scale = fixedSize ? 1 : cardScale(recipe, inset);
+  const width = Math.round(baseWidth * scale);
+  const height = Math.round(baseHeight * scale);
 
-  const pattern = useMemo(
-    () => (spellId ? buildPattern(seedFromString(spellId, school?.patternSalt ?? 0)) : []),
-    [spellId, school?.patternSalt],
-  );
+  // Horizontal room the silhouette actually leaves for text.
+  const padX = Math.round(6 + (width / 2) * inset);
+  const sigilSize = Math.round(Math.min(44 * scale, width - padX * 2 - 4));
+
+  const color = spell ? spell.color : accentColor ?? '#333';
+  const glow = spell ? spell.glowColor : accentColor ?? '#333';
+  const palette = useCardPalette(recipe, color, glow);
 
   const onCooldown = cooldownPct > 0;
   const fillPct = Math.min(1, Math.max(0, 1 - cooldownPct));
-  const spinDelay = spellId ? seedFromString(spellId, 91) % 4000 : 0;
   const breatheDelay = spellId ? seedFromString(spellId, 47) % 3400 : 0;
   const interactive = !!onClick;
 
@@ -101,9 +109,17 @@ export function SpellCard({ spellId, spell, slotLabel, cooldownSec, cooldownPct,
   }, [onCooldown]);
 
   const hoverLift = interactive && hovered && !onCooldown;
+  const lit = !!(forceLit || active || hoverLift);
+  const clip = frameClip(recipe.frame);
+
+  // Cooldown reuses the recipe's silhouette but strips it back to grey --
+  // the flood then repaints the real palette from the bottom up.
+  const greyRecipe = useMemo<CardRecipe>(() => ({ ...recipe, motion: [], corner: 'none', aura: 0 }), [recipe]);
+  const greyPalette = useMemo(() => ({ base: GREY_FRAME, deep: GREY_BG, accent: '#5a5a64', glow: '#6e6e7a', ink: '#9a9aa6' }), []);
 
   return (
     <div
+      data-ww-card
       onClick={onClick}
       onMouseEnter={() => interactive && setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -114,7 +130,7 @@ export function SpellCard({ spellId, spell, slotLabel, cooldownSec, cooldownPct,
         cursor: onClick ? 'pointer' : 'default',
         pointerEvents: onClick ? 'all' : 'none',
         perspective: 700,
-        filter: active ? `drop-shadow(0 0 10px ${glow}cc)` : hoverLift ? `drop-shadow(0 0 7px ${glow}99)` : 'none',
+        filter: label ? auraFilter(recipe, palette, lit) : undefined,
         transition: `filter 150ms ease, transform ${justCast ? '160ms' : '180ms'} ${SNAPPY}, margin 220ms ${SNAPPY}`,
         transform: justCast
           ? 'scale(1.14)'
@@ -125,11 +141,6 @@ export function SpellCard({ spellId, spell, slotLabel, cooldownSec, cooldownPct,
         flexShrink: 0,
       }}
     >
-      <style>{`
-        @keyframes ww-spellcard-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        @keyframes ww-spellcard-breathe { 0%, 100% { transform: scale(1); opacity: 0.85; } 50% { transform: scale(1.08); opacity: 1; } }
-      `}</style>
-
       {/* Flip stage */}
       <div style={{
         position: 'relative', width: '100%', height: '100%',
@@ -139,66 +150,47 @@ export function SpellCard({ spellId, spell, slotLabel, cooldownSec, cooldownPct,
       }}>
         {/* ---------- FRONT (face up, ready) ---------- */}
         <div style={{ position: 'absolute', inset: 0, backfaceVisibility: 'hidden', WebkitBackfaceVisibility: 'hidden' }}>
-          <div style={{ position: 'absolute', inset: 0, clipPath, WebkitClipPath: clipPath, background: active ? color : `${color}99` }} />
-          <div style={{
-            position: 'absolute', inset: 2, clipPath, WebkitClipPath: clipPath, overflow: 'hidden',
-            background: spell ? `linear-gradient(160deg, ${color}33 0%, rgba(8,8,14,0.96) 55%)` : 'rgba(10,10,16,0.85)',
-          }}>
-            {spell && pattern.length > 0 && (
-              <svg width="100%" height="100%" style={{ position: 'absolute', inset: 0 }} preserveAspectRatio="none" viewBox="0 0 100 100">
-                {pattern.map((l, i) => (
-                  <line key={i} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} stroke={glow} strokeWidth={0.6} opacity={l.opacity} />
-                ))}
-              </svg>
-            )}
-
-            {/* Center content: big glowing type symbol instead of a plain color dot */}
-            <div style={{
-              position: 'absolute', inset: 0,
-              display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-              padding: '0 6px', textAlign: 'center',
-            }}>
-              {spell ? (
-                <>
-                  <div style={{ position: 'relative', width: 44, height: 44, marginBottom: 5, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <div style={{
-                      position: 'absolute', inset: 0, borderRadius: '50%',
-                      background: `radial-gradient(circle, ${glow}59 0%, ${color}22 45%, transparent 74%)`,
-                      filter: 'blur(0.5px)',
-                    }} />
-                    <div style={{
-                      position: 'absolute', inset: 5, borderRadius: '50%',
-                      background: `conic-gradient(from 0deg, transparent, ${glow}70, transparent 65%)`,
-                      opacity: active || hoverLift ? 0.9 : 0.5,
-                      animation: `ww-spellcard-spin ${active ? '3.2s' : '6s'} linear -${spinDelay}ms infinite`,
-                    }} />
-                    <div style={{
-                      position: 'absolute', inset: 10, borderRadius: '50%',
-                      background: 'rgba(6,6,10,0.72)', boxShadow: `inset 0 0 6px ${glow}55`,
-                    }} />
-                    <SpellTypeIcon kind={kind} size={24} color={color} style={{ position: 'relative', filter: `drop-shadow(0 0 4px ${glow}bb)` }} />
-                  </div>
-                  <div style={{ fontSize: 12, color: textColor, lineHeight: 1.15, fontWeight: 600 }}>{spell.name}</div>
-                </>
-              ) : (
+          {label ? (
+            <CardFace recipe={recipe} palette={palette} lit={lit} boost={lit ? 1.35 : 1}>
+              <div style={{
+                position: 'absolute', inset: 0,
+                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                padding: `0 ${padX}px`, textAlign: 'center',
+              }}>
+                <CardSigil recipe={recipe} palette={palette} size={sigilSize} lit={lit}>
+                  <SpellTypeIcon
+                    kind={kind}
+                    size={Math.round(sigilSize * 0.55)}
+                    color={legibleAccent(palette.accent, palette.glow)}
+                    style={{ filter: `drop-shadow(0 0 4px ${palette.glow}bb)` }}
+                  />
+                </CardSigil>
+                <div style={{
+                  marginTop: 5, color: palette.ink,
+                  textShadow: `0 1px 3px rgba(0,0,0,0.9)`,
+                  ...nameStyle(recipe, label, width - padX * 2, height * 0.34),
+                }}>
+                  {label}
+                </div>
+              </div>
+            </CardFace>
+          ) : (
+            <>
+              <div style={{ position: 'absolute', inset: 0, clipPath: clip, WebkitClipPath: clip, background: '#333' }} />
+              <div style={{
+                position: 'absolute', inset: 2, clipPath: clip, WebkitClipPath: clip,
+                background: 'rgba(10,10,16,0.85)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
                 <div style={{ fontSize: 10, color: '#555' }}>Empty</div>
-              )}
-            </div>
-          </div>
+              </div>
+            </>
+          )}
         </div>
 
         {/* ---------- BACK (face down, on cooldown: greyscale, floods with the spell's color as it recharges) ---------- */}
         <div style={{ position: 'absolute', inset: 0, backfaceVisibility: 'hidden', WebkitBackfaceVisibility: 'hidden', transform: 'rotateY(180deg)' }}>
-          <div style={{ position: 'absolute', inset: 0, clipPath, WebkitClipPath: clipPath, background: GREY_FRAME }} />
-          <div style={{ position: 'absolute', inset: 2, clipPath, WebkitClipPath: clipPath, overflow: 'hidden', background: GREY_BG }}>
-            {/* Greyscale base art */}
-            {pattern.length > 0 && (
-              <svg width="100%" height="100%" style={{ position: 'absolute', inset: 0 }} preserveAspectRatio="none" viewBox="0 0 100 100">
-                {pattern.map((l, i) => (
-                  <line key={i} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} stroke={GREY_LINE} strokeWidth={0.6} opacity={l.opacity} />
-                ))}
-              </svg>
-            )}
+          <CardFace recipe={greyRecipe} palette={greyPalette}>
             <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <SpellTypeIcon kind={kind} size={26} color={GREY_ICON} />
             </div>
@@ -209,16 +201,17 @@ export function SpellCard({ spellId, spell, slotLabel, cooldownSec, cooldownPct,
               clipPath: `inset(${(1 - fillPct) * 100}% 0% 0% 0%)`,
               transition: 'clip-path 100ms linear',
             }}>
-              <div style={{ position: 'absolute', inset: 0, background: `linear-gradient(160deg, ${color}55 0%, rgba(8,8,14,0.96) 60%)` }} />
-              {pattern.length > 0 && (
-                <svg width="100%" height="100%" style={{ position: 'absolute', inset: 0 }} preserveAspectRatio="none" viewBox="0 0 100 100">
-                  {pattern.map((l, i) => (
-                    <line key={i} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} stroke={glow} strokeWidth={0.6} opacity={l.opacity} />
-                  ))}
-                </svg>
-              )}
+              <div style={{
+                position: 'absolute', inset: 0,
+                background: `linear-gradient(160deg, ${palette.base}55 0%, rgba(8,8,14,0.96) 60%)`,
+              }} />
               <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <SpellTypeIcon kind={kind} size={26} color={color} style={{ filter: `drop-shadow(0 0 5px ${glow}cc)` }} />
+                <SpellTypeIcon
+                  kind={kind}
+                  size={26}
+                  color={legibleAccent(palette.accent, palette.glow)}
+                  style={{ filter: `drop-shadow(0 0 5px ${palette.glow}cc)` }}
+                />
               </div>
             </div>
 
@@ -230,7 +223,7 @@ export function SpellCard({ spellId, spell, slotLabel, cooldownSec, cooldownPct,
                 {cooldownSec.toFixed(1)}
               </div>
             )}
-          </div>
+          </CardFace>
         </div>
       </div>
 
@@ -238,8 +231,8 @@ export function SpellCard({ spellId, spell, slotLabel, cooldownSec, cooldownPct,
       {active && !onCooldown && spell && (
         <div style={{
           position: 'absolute', inset: -4, borderRadius: 10, pointerEvents: 'none',
-          boxShadow: `0 0 14px ${glow}88`,
-          animation: `ww-spellcard-breathe 2.6s ease-in-out -${breatheDelay}ms infinite`,
+          boxShadow: `0 0 14px ${palette.glow}88`,
+          animation: `ww-ca-aura 2.6s ease-in-out -${breatheDelay}ms infinite`,
         }} />
       )}
     </div>

@@ -7,12 +7,12 @@
  * without duplicating the mapping.
  */
 
-export const CLASS_SYMBOL = { fire: '🔥', ice: '❄️', dark: '🌑', sword: '⚔️', earth: '🌍' };
-export const CLASS_LABEL = { fire: 'Fire', ice: 'Ice', dark: 'Dark', sword: 'Sword', earth: 'Earth' };
+export const CLASS_SYMBOL = { fire: '🔥', ice: '❄️', dark: '🌑', sword: '⚔️', druid: '🌿', crystalmancer: '💎' };
+export const CLASS_LABEL = { fire: 'Fire', ice: 'Ice', dark: 'Dark', sword: 'Sword', druid: 'Druid', crystalmancer: 'Crystalmancer' };
 
 // wizardClass -> branchGroup id, matching shared/skillTrees.js's one fork per class.
 export const CLASS_FORK_GROUP = {
-  fire: 'fire_fork', ice: 'ice_fork', dark: 'dark_fork', sword: 'sword_fork', earth: 'earth_fork',
+  fire: 'fire_fork', ice: 'ice_fork', dark: 'dark_fork', sword: 'sword_fork', druid: 'druid_fork', crystalmancer: 'crystal_fork',
 };
 
 // branchGroup -> branch id -> flavor once a player has diverged.
@@ -33,9 +33,13 @@ export const BRANCH_FLAVOR = {
     parry: { symbol: '🛡️', title: 'Duelist' },
     blade_rain: { symbol: '🗡️', title: 'Warlord' },
   },
-  earth_fork: {
-    bulwark: { symbol: '🪨', title: 'Bulwark' },
-    tectonic: { symbol: '⛰️', title: 'Seismic Adept' },
+  druid_fork: {
+    overgrowth: { symbol: '🌳', title: 'Warden' },
+    feral: { symbol: '🐺', title: 'Feral Druid' },
+  },
+  crystal_fork: {
+    prismatic: { symbol: '🔷', title: 'Prism Adept' },
+    shattering: { symbol: '💥', title: 'Crystal Breaker' },
   },
 };
 

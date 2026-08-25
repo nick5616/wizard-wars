@@ -1,8 +1,11 @@
 import { v4 as uuid } from 'uuid';
-import { getSpell, MOBILITY_SPELL, BASIC_ATTACK, MELEE_ATTACK } from 'shared/spells';
+import { getSpell, MOBILITY_SPELL, DEFENSIVE_SPELL, BASIC_ATTACK, MELEE_ATTACK } from 'shared/spells';
 import { S2C } from 'shared/events';
-import { DOMAIN_CONFIGS } from 'shared/gameConfig';
-import { MAX_CONCURRENT_DOMAINS, ARENA_RADIUS, PLAYER_HEIGHT, CAST_MAX_RANGE } from 'shared/constants';
+import { DOMAIN_CONFIGS, PROJECTILE_GRAVITY } from 'shared/gameConfig';
+import {
+  MAX_CONCURRENT_DOMAINS, ARENA_RADIUS, PLAYER_HEIGHT, CAST_MAX_RANGE, BASE_MOVE_SPEED,
+  MOVE_CURVE_SPEED_CAP, MAX_CURVE_DEG, BASE_ARC_ANGLE_DEG, ARC_ANGLE_SWING_DEG, MIN_ARC_ANGLE_DEG, MAX_ARC_ANGLE_DEG,
+} from 'shared/constants';
 import { hatCenterY, hatRadius } from 'shared/leveling';
 import { terrainRaycastBlocked, rayIntersectsCylinder } from 'shared/mapLayout';
 
@@ -125,8 +128,8 @@ export class SpellSystem {
 
   /** Actually executes a validated, non-windup (or windup-resolved) cast. */
   _dispatchCast(player, spell, aimDir, targetId, clientTimestamp) {
-    // Earth Geologic: any cast builds a defense stack (consumed/reset on taking a hit — see Room.applyDamage)
-    if (player.class === 'earth' && player.unlockedNodes.has('geologic')) {
+    // Crystalmancer Geologic: any cast builds a defense stack (consumed/reset on taking a hit — see Room.applyDamage)
+    if (player.class === 'crystalmancer' && player.unlockedNodes.has('geologic')) {
       player.geologicStacks = Math.min(4, player.geologicStacks + 1);
     }
 
@@ -141,7 +144,8 @@ export class SpellSystem {
     }
 
     switch (spell.type) {
-      case 'projectile': this._castProjectile(player, spell, aimDir, clientTimestamp); break;
+      case 'projectile':
+      case 'arc':        this._castProjectile(player, spell, aimDir, clientTimestamp); break;
       case 'beam':       this._castBeam(player, spell, aimDir, clientTimestamp); break;
       case 'hitscan':
         if (spell.bounces) this._castChainHitscan(player, spell, aimDir, clientTimestamp);
@@ -208,8 +212,31 @@ export class SpellSystem {
       case 'ice':   this._glacierStep(player, spell, input); break;
       case 'dark':  this._phaseSlip(player, spell, input); break;
       case 'sword': this._swordLunge(player, spell, input); break;
-      case 'earth': this._stoneLaunch(player, spell); break;
+      case 'druid':
+      case 'crystalmancer': this._stoneLaunch(player, spell); break;
     }
+  }
+
+  // Defensive spell (Q) -- one per class, always available, same "outside
+  // the slot system" treatment as handleMobility above. Activates a window
+  // of damage reduction / absorb / full-counter, resolved in Room.applyDamage
+  // whenever this player next takes damage. No positional/visual dispatch of
+  // its own (unlike mobility) -- it's a pure buff-yourself cast.
+  handleDefensive(player) {
+    const spellId = DEFENSIVE_SPELL[player.class];
+    if (!spellId) return;
+    if (!player.isAlive || player.hasEffect('stun')) return;
+
+    const spell = getSpell(spellId);
+    if (!spell || (!player.isDebugMode && player.isOnCooldown(spellId))) return;
+
+    if (!player.isDebugMode) player.setCooldown(spellId, spell.cooldown);
+
+    player.defensiveActive = true;
+    player.defensiveExpiry = Date.now() + spell.duration * 1000;
+    player.defensiveMode = spell.fullCounter ? 'counter' : spell.absorbAmount ? 'absorb' : 'reduction';
+    player.defensiveDamageReduction = spell.damageReduction ?? 0;
+    player.defensiveAbsorbRemaining = spell.absorbAmount ?? 0;
   }
 
   // ── Basic attack (RMB) & melee (F) ──────────────────────────────────────
@@ -243,6 +270,7 @@ export class SpellSystem {
       if (pid === player.id) continue;
       const target = this.room.server.players.get(pid);
       if (!target || !target.isAlive) continue;
+      if (player.team != null && target.team === player.team) continue;
 
       const dx = target.position.x - player.position.x;
       const dz = target.position.z - player.position.z;
@@ -302,10 +330,44 @@ export class SpellSystem {
   _castProjectile(player, spell, aimDir, clientTimestamp, isPhantom = false) {
     const count = spell.spreadCount ?? 1;
     const baseAngle = spell.spreadAngle ?? 0;
+    const isArc = spell.type === 'arc';
+
+    // Movement-curve aiming: strafing/backpedaling bends the shot, deterministically,
+    // using the same yaw basis Room._simulatePlayer uses for wishX/wishZ so "left" and
+    // "forward" mean the same thing to movement and to this. Not random spread — a
+    // player can learn to lead their aim to compensate, or strafe on purpose to curve
+    // a shot around cover.
+    const yaw = player.yaw;
+    const fwdVec = { x: -Math.sin(yaw), z: -Math.cos(yaw) };
+    const rightVec = { x: Math.cos(yaw), z: -Math.sin(yaw) };
+    const vx = player.velocity.x, vz = player.velocity.z;
+    const lateralSpeed = vx * rightVec.x + vz * rightVec.z; // + = strafing right
+    const forwardSpeed = vx * fwdVec.x + vz * fwdVec.z;     // + = moving forward, - = backpedal
+    const lateralRatio = Math.max(-MOVE_CURVE_SPEED_CAP, Math.min(MOVE_CURVE_SPEED_CAP, lateralSpeed / BASE_MOVE_SPEED));
+    const forwardRatio = Math.max(-MOVE_CURVE_SPEED_CAP, Math.min(MOVE_CURVE_SPEED_CAP, forwardSpeed / BASE_MOVE_SPEED));
+    const curveRad = (lateralRatio / MOVE_CURVE_SPEED_CAP) * MAX_CURVE_DEG * Math.PI / 180;
+
+    let baseDir = { ...aimDir };
+    // Bend the horizontal aim by the strafe curve.
+    {
+      const cos = Math.cos(curveRad), sin = Math.sin(curveRad);
+      baseDir = { x: baseDir.x * cos - baseDir.z * sin, y: baseDir.y, z: baseDir.x * sin + baseDir.z * cos };
+    }
+    if (isArc) {
+      // Arc spells auto-pick their launch angle from forward/backward movement
+      // (backpedal = higher lob, advancing = flatter) instead of aiming with
+      // camera pitch -- aim horizontally, the game picks how it arcs.
+      const launchAngleDeg = Math.max(MIN_ARC_ANGLE_DEG, Math.min(MAX_ARC_ANGLE_DEG,
+        BASE_ARC_ANGLE_DEG - (forwardRatio / MOVE_CURVE_SPEED_CAP) * ARC_ANGLE_SWING_DEG));
+      const launchAngleRad = launchAngleDeg * Math.PI / 180;
+      const horizLen = Math.hypot(baseDir.x, baseDir.z) || 1;
+      const horizX = baseDir.x / horizLen, horizZ = baseDir.z / horizLen;
+      baseDir = { x: horizX * Math.cos(launchAngleRad), y: Math.sin(launchAngleRad), z: horizZ * Math.cos(launchAngleRad) };
+    }
 
     for (let i = 0; i < count; i++) {
       const id = uuid();
-      let dir = { ...aimDir };
+      let dir = { ...baseDir };
 
       if (count > 1) {
         const angle = ((i / (count - 1)) - 0.5) * (baseAngle * Math.PI / 180);
@@ -458,6 +520,7 @@ export class SpellSystem {
         if (hitIds.has(pid)) continue;
         const p = this.room.server.players.get(pid);
         if (!p || !p.isAlive) continue;
+        if (player.team != null && p.team === player.team) continue;
         const dx = p.position.x - fromPos.x, dz = p.position.z - fromPos.z;
         const dist = Math.sqrt(dx * dx + dz * dz);
         if (dist < maxChainRange && dist < nearestDist) { nearestDist = dist; nearestId = pid; }
@@ -612,10 +675,10 @@ export class SpellSystem {
   _createBarrier(player, spell, aimDir) {
     const id = uuid();
     const distance = 4;
-    const height = spell.id === 'rock_wall' ? 4 : 3.5;
+    const height = spell.id === 'crystal_wall' ? 4 : 3.5;
     const width = 6;
-    // Earth Bulwark Stance: your own barriers are tougher
-    const bulwark = player.unlockedNodes.has('bulwark_stance') ? 1.5 : 1;
+    // Druid Overgrowth Ward / Crystalmancer Prismatic Ward: your own barriers are tougher
+    const bulwark = (player.unlockedNodes.has('overgrowth_ward') || player.unlockedNodes.has('prismatic_ward')) ? 1.5 : 1;
 
     this.room.barriers.set(id, {
       id,
@@ -681,6 +744,7 @@ export class SpellSystem {
       if (pid === player.id) continue;
       const target = this.room.server.players.get(pid);
       if (!target || !target.isAlive) continue;
+      if (player.team != null && target.team === player.team) continue;
       const t = rayIntersectsCylinder(origin, aimDir, {
         x: target.position.x, z: target.position.z, radius: 0.6,
         baseY: target.position.y - PLAYER_HEIGHT, height: PLAYER_HEIGHT + 0.3,
@@ -849,14 +913,19 @@ export class SpellSystem {
         }
       }
 
+      const projSpell = getSpell(proj.spellId);
+
+      // Apply gravity — 'arc' spells (lobbed, e.g. Fireball) fall under gravity;
+      // everything else keeps a flat trajectory.
+      if (projSpell?.type === 'arc') {
+        proj.velocity.y += PROJECTILE_GRAVITY[projSpell.gravity ?? 'normal'] * dt;
+      }
+
       // Move projectile
       const prevPos = { x: proj.position.x, y: proj.position.y, z: proj.position.z };
       proj.position.x += proj.velocity.x * dt;
       proj.position.y += proj.velocity.y * dt;
       proj.position.z += proj.velocity.z * dt;
-
-      // Apply gravity (most projectiles have none or slight gravity)
-      // None for now — can extend per spell
 
       // Boundary check
       const dx = proj.position.x, dz = proj.position.z;
@@ -866,7 +935,6 @@ export class SpellSystem {
       }
 
       // Terrain collision — a wall/platform crossed this tick's movement segment
-      const projSpell = getSpell(proj.spellId);
       if (!projSpell?.wallPiercing) {
         const segX = proj.position.x - prevPos.x, segY = proj.position.y - prevPos.y, segZ = proj.position.z - prevPos.z;
         const segLen = Math.sqrt(segX * segX + segY * segY + segZ * segZ);
@@ -1065,7 +1133,7 @@ export class SpellSystem {
     for (const id of domainToRemove) this.room.domains.delete(id);
   }
 
-  /** Passives that trigger when a domain expires: Ice Hypothermia, Earth Tectonic. */
+  /** Passives that trigger when a domain expires: Ice Hypothermia, Druid Overgrowth Pulse, Crystalmancer Crystalline Growth. */
   _onDomainEnd(domain) {
     const owner = this.room.server.players.get(domain.ownerId);
     if (!owner) return;
@@ -1078,13 +1146,18 @@ export class SpellSystem {
       }
     }
 
-    if (domain.spellId === 'terra_domain' && owner.unlockedNodes.has('tectonic')) {
+    if (domain.spellId === 'wildwood_domain' && owner.unlockedNodes.has('overgrowth_pulse')) {
       owner.bedrock = true;
       owner.bedrockIdleSince = Date.now() - 2000;
     }
+
+    if (domain.spellId === 'prism_field' && owner.unlockedNodes.has('crystalline_growth')) {
+      owner.resonanceStacks = 3;
+      owner.resonanceExpiry = Date.now() + 5000;
+    }
   }
 
-  /** Per-domain effects that aren't just a movement/projectile multiplier — currently just Terra Domain's periodic stone spires. */
+  /** Per-domain effects that aren't just a movement/projectile multiplier — currently just Wildwood Domain / Prism Field's periodic spires. */
   _tickDomainEffects(domain, now) {
     if (now < domain.activatesAt) return;
     const config = DOMAIN_CONFIGS[domain.spellId];
@@ -1157,17 +1230,19 @@ export class SpellSystem {
     });
   }
 
-  /** A single Terra Domain stone spire: brief telegraph, then a burst of damage. The owner is immune (see _resolveAoe's owner skip). */
+  /** A single Wildwood Domain / Prism Field spire: brief telegraph, then a burst of damage. The owner is immune (see _resolveAoe's owner skip). */
   _spawnSpire(ownerId, position) {
     const id = uuid();
     const telegraphMs = 500;
+    const owner = this.room.server.players.get(ownerId);
+    const isDruid = owner?.class === 'druid';
     this.room.effects.set(id, {
       id,
       type: 'aoe',
-      spellId: 'terra_domain_spire',
-      school: 'earth',
-      color: '#8B6914',
-      glowColor: '#6B5010',
+      spellId: isDruid ? 'wildwood_domain_spire' : 'prism_field_spire',
+      school: isDruid ? 'druid' : 'crystalmancer',
+      color: isDruid ? '#3d6e2a' : '#6fb8e0',
+      glowColor: isDruid ? '#5a9e3d' : '#8fd4ff',
       ownerId,
       position,
       radius: 2.0,
@@ -1414,15 +1489,17 @@ export class SpellSystem {
     player.velocity.y = spell.launchForce ?? 20;
     player.isGrounded = false;
 
+    const isDruid = player.class === 'druid';
+
     // Slam damage nearby
     const slamId = uuid();
     this.room.effects.set(slamId, {
       id: slamId,
       type: 'aoe',
-      spellId: 'stone_launch_slam',
-      school: 'earth',
-      color: '#8B6914',
-      glowColor: '#a08030',
+      spellId: isDruid ? 'root_launch_slam' : 'crystal_launch_slam',
+      school: player.class,
+      color: isDruid ? '#5a9e3d' : '#8fd4ff',
+      glowColor: isDruid ? '#8fd15a' : '#c8f0ff',
       ownerId: player.id,
       position: { ...player.position },
       radius: 3,
@@ -1438,17 +1515,17 @@ export class SpellSystem {
       active: true,
     });
 
-    // Earth The Deep: Stone Launch auto-triggers a small Fissure in the direction the player is facing
-    if (player.unlockedNodes.has('the_deep')) {
+    // Druid Overgrowth Pulse: Root Launch auto-triggers a small Bramble Burst in the direction the player is facing
+    if (isDruid && player.unlockedNodes.has('overgrowth_pulse')) {
       const dir = { x: -Math.sin(player.yaw), z: -Math.cos(player.yaw) };
       const fissureId = uuid();
       this.room.effects.set(fissureId, {
         id: fissureId,
         type: 'aoe',
-        spellId: 'the_deep_fissure',
-        school: 'earth',
-        color: '#6B5010',
-        glowColor: '#8B6914',
+        spellId: 'overgrowth_pulse_burst',
+        school: 'druid',
+        color: '#3d6e2a',
+        glowColor: '#5a9e3d',
         ownerId: player.id,
         position: { x: player.position.x, y: 0, z: player.position.z },
         radius: 1.0,

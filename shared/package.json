@@ -11,6 +11,7 @@
     "./gameConfig": "./gameConfig.js",
     "./skillTrees": "./skillTrees.js",
     "./classFlavor": "./classFlavor.js",
+    "./gameModes": "./gameModes.js",
     "./leveling": "./leveling.js",
     "./mapLayout": "./mapLayout.js",
     "./movement": "./movement.js"

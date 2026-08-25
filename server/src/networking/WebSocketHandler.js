@@ -1,7 +1,19 @@
+import { writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { v4 as uuid } from 'uuid';
 import { C2S, S2C } from 'shared/events';
 import { getNode, canUnlockNode } from 'shared/skillTrees';
 import { CLASSES } from 'shared/constants';
-import { MAX_SPELL_SLOTS } from 'shared/spells';
+import { MAX_SPELL_SLOTS, ALL_SPELLS } from 'shared/spells';
+import { GAME_MODES } from 'shared/gameModes';
+
+// Design Lab writes here. Fixed path, never derived from the message — the
+// client only ever sends the contents, never a destination.
+const CARD_BANK_PATH = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../../../client/src/data/cardRecipeBank.json',
+);
 
 export class WebSocketHandler {
   constructor(server) {
@@ -17,17 +29,22 @@ export class WebSocketHandler {
       case C2S.PLAYER_INPUT:   this._handleInput(player, msg); break;
       case C2S.EQUIP_SPELL:    this._handleEquipSpell(player, msg); break;
       case C2S.BUY_SKILL_NODE: this._handleBuyNode(player, msg); break;
+      case C2S.REVEAL_LORE:    this._handleRevealLore(player, msg); break;
       case C2S.RESPAWN:        this._handleRespawn(player, msg); break;
       case C2S.SKILL_VOTE_RESOLVE: this._handleVoteResolve(player, msg); break;
       case C2S.DEBUG_GRANT:    this._handleDebugGrant(player); break;
+      case C2S.DEBUG_SET_BRANCH: this._handleDebugSetBranch(player, msg); break;
       case C2S.SPAWN_BOTS:     this._handleSpawnBots(player, msg); break;
       case C2S.DESPAWN_BOTS:   this._handleDespawnBots(player, msg); break;
+      case C2S.START_MATCH:    this._handleStartMatch(player, msg); break;
+      case C2S.LEAVE_ROOM:     this._handleLeaveRoom(player, msg); break;
       case C2S.SPAWN_BOT:        this._handleSpawnBot(player, msg); break;
       case C2S.DESPAWN_BOT:      this._handleDespawnBot(player, msg); break;
       case C2S.SET_BOT_BEHAVIOR: this._handleSetBotBehavior(player, msg); break;
       case C2S.SET_BOT_LOADOUT:  this._handleSetBotLoadout(player, msg); break;
       case C2S.SET_BOT_AUTO_EQUIP: this._handleSetBotAutoEquip(player, msg); break;
       case C2S.RUN_SIMULATION:   this._handleRunSimulation(player, msg); break;
+      case C2S.SAVE_CARD_RECIPES: this._handleSaveCardRecipes(player, msg); break;
       default: break;
     }
   }
@@ -83,12 +100,38 @@ export class WebSocketHandler {
     if (!player.roomId) return;
     const oldRoomId = player.roomId;
     this.server.rooms.get(oldRoomId)?.removePlayer(player.id);
-    this.server.cleanupEmptyExperimentRoom(oldRoomId);
+    this.server.cleanupEmptyPrivateRoom(oldRoomId);
     player.roomId = null;
   }
 
+  /**
+   * Landing screen "Single Player": spins up a private match room (never
+   * shared with other humans), assigns the picked mode's team/bot roster
+   * via Room.setupMatch, and drops the player straight into it.
+   */
+  _handleStartMatch(player, msg) {
+    const mode = GAME_MODES[msg?.mode];
+    if (!mode || !CLASSES.includes(msg?.class)) return;
+
+    this._leaveCurrentRoom(player);
+    const roomId = `match-${uuid()}`;
+    const room = this.server.getOrCreateRoom(roomId, { respawnEnabled: false, matchMode: true });
+
+    if (typeof msg.username === 'string' && msg.username.trim()) {
+      player.username = msg.username.trim().slice(0, 20);
+    }
+    room.addPlayer(player);
+    player.selectClass(msg.class);
+    room.setupMatch(mode, player);
+  }
+
+  /** Returns to "no room" (the main menu) without joining the lobby -- see C2S.LEAVE_ROOM. */
+  _handleLeaveRoom(player, msg) {
+    this._leaveCurrentRoom(player);
+  }
+
   _handleSelectClass(player, msg) {
-    const validClasses = ['fire', 'ice', 'dark', 'sword', 'earth'];
+    const validClasses = ['fire', 'ice', 'dark', 'sword', 'druid', 'crystalmancer'];
     if (!validClasses.includes(msg.class)) return;
 
     if (typeof msg.username === 'string' && msg.username.trim()) {
@@ -121,6 +164,7 @@ export class WebSocketHandler {
       pitch: msg.pitch ?? player.pitch,
       cast: msg.cast ?? null,
       mobility: msg.mobility ?? false,
+      defensive: msg.defensive ?? false,
       basicAttack: msg.basicAttack ?? null,
       melee: msg.melee ?? null,
       activeSlot: msg.activeSlot,
@@ -144,6 +188,14 @@ export class WebSocketHandler {
     room?.progressionSystem.forceUnlockAll(player);
   }
 
+  /** Debug mode: switch to any subclass of any class mid-session -- no respawn, so whatever's currently running (bots, an Experiment Lab session) just keeps going. */
+  _handleDebugSetBranch(player, msg) {
+    if (!player.isDebugMode || !player.roomId) return;
+    if (!CLASSES.includes(msg?.class)) return;
+    const room = this.server.rooms.get(player.roomId);
+    room?.progressionSystem.setDebugSubclass(player, msg.class, msg.branch);
+  }
+
   _handleBuyNode(player, msg) {
     const { nodeId } = msg;
     if (!nodeId || !player.class || player.skillPoints <= 0) return;
@@ -163,10 +215,30 @@ export class WebSocketHandler {
     });
   }
 
+  /** Spend 1 skill point to reveal a glossary lore entry without unlocking the node itself -- see Player.revealedLore. */
+  _handleRevealLore(player, msg) {
+    const { nodeId } = msg;
+    if (!nodeId || !player.class || player.skillPoints <= 0) return;
+
+    const node = getNode(player.class, nodeId);
+    if (!node) return;
+    if (player.unlockedNodes.has(nodeId) || player.revealedLore.has(nodeId)) return;
+
+    player.revealedLore.add(nodeId);
+    player.skillPoints--;
+    this.server.persistPlayer(player);
+
+    this.server.send(player, {
+      type: S2C.LORE_REVEALED,
+      nodeId,
+      skillPoints: player.skillPoints,
+    });
+  }
+
   _handleRespawn(player, msg) {
     if (!player.roomId || player.isAlive) return;
     const room = this.server.rooms.get(player.roomId);
-    if (!room) return;
+    if (!room || !room.respawnEnabled) return; // match rooms: eliminated means eliminated until MATCH_END
 
     if (msg?.newClass && CLASSES.includes(msg.newClass) && msg.newClass !== player.class) {
       player.selectClass(msg.newClass);
@@ -263,12 +335,107 @@ export class WebSocketHandler {
       });
   }
 
+  /**
+   * Design Lab "Save to repo": persist picked card looks into
+   * client/src/data/cardRecipeBank.json.
+   *
+   * This is the one handler that touches the filesystem, so it's the one
+   * worth being paranoid in: localhost-gated like the rest of the lab, but
+   * additionally the payload is rebuilt field by field rather than
+   * stringified as-received. A recipe is a fixed set of scalars, so anything
+   * the client sends that isn't one of them simply doesn't survive the trip.
+   */
+  async _handleSaveCardRecipes(player, msg) {
+    if (!player.isLocalConnection) return;
+
+    const bank = {};
+    for (const [id, entry] of Object.entries(msg.bank ?? {})) {
+      const recipe = sanitizeRecipe(entry?.recipe);
+      // Key and recipe id must agree, or assignments would dangle.
+      if (!recipe || recipe.id !== id) continue;
+      bank[id] = {
+        recipe,
+        ...(typeof entry.note === 'string' && entry.note ? { note: entry.note.slice(0, 200) } : {}),
+        ...(Array.isArray(entry.assigned)
+          ? { assigned: entry.assigned.filter((s) => typeof s === 'string' && s in ALL_SPELLS) }
+          : {}),
+      };
+    }
+
+    const assignments = {};
+    for (const [spellId, recipeId] of Object.entries(msg.assignments ?? {})) {
+      // Drop assignments pointing at spells or recipes that don't exist --
+      // otherwise a stale localStorage entry gets committed to the repo.
+      if (spellId in ALL_SPELLS && typeof recipeId === 'string' && bank[recipeId]) {
+        assignments[spellId] = recipeId;
+      }
+    }
+
+    try {
+      await writeFile(CARD_BANK_PATH, `${JSON.stringify({ bank, assignments }, null, 2)}\n`, 'utf8');
+      console.log(`[design-lab] wrote ${Object.keys(bank).length} recipes, ${Object.keys(assignments).length} assignments`);
+    } catch (err) {
+      this.server.send(player, { type: S2C.ERROR, message: `Could not write card bank: ${err.message}` });
+    }
+  }
+
   _handleVoteResolve(player, msg) {
     const { promptId, choice } = msg;
     if (!player.roomId || !promptId || !choice) return;
     const room = this.server.rooms.get(player.roomId);
     if (room) room.progressionSystem.resolveVote(player, promptId, choice);
   }
+}
+
+/**
+ * Rebuild a CardRecipe from untrusted input, keeping only the fields the
+ * schema defines and forcing each to its expected type and range.
+ *
+ * Deliberately checks *shape* rather than exact enum membership: the
+ * vocabularies (frame names, motion kinds, ...) live in the client's
+ * cardRecipe.ts and get extended regularly, and a server-side copy of them
+ * would silently start rejecting new looks the moment the two drifted. An
+ * unknown frame name renders as the default silhouette, which is a cosmetic
+ * miss; junk written into a source file is not. So the invariant enforced
+ * here is "this is a well-formed recipe object", not "these are looks I
+ * recognise".
+ */
+function sanitizeRecipe(r) {
+  if (!r || typeof r !== 'object') return null;
+
+  const str = (v, fallback) => (typeof v === 'string' && v.length > 0 && v.length <= 64 ? v : fallback);
+  const num = (v, min, max, fallback) =>
+    (typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback);
+
+  const id = str(r.id, null);
+  const name = str(r.name, null);
+  if (!id || !name) return null;
+  // ids become object keys in a committed JSON file and slugs elsewhere.
+  if (!/^[a-z0-9-]+$/.test(id)) return null;
+
+  return {
+    id,
+    name: name.slice(0, 64),
+    grade: num(r.grade, 0, 1, 0),
+    frame: str(r.frame, 'plain'),
+    border: str(r.border, 'flat'),
+    borderWidth: num(r.borderWidth, 0, 8, 2),
+    fill: str(r.fill, 'gradient'),
+    paletteMod: str(r.paletteMod, 'natural'),
+    texture: str(r.texture, 'none'),
+    textureDensity: num(r.textureDensity, 0, 1, 0),
+    motion: Array.isArray(r.motion)
+      ? r.motion.filter((m) => typeof m === 'string' && m.length <= 32).slice(0, 4)
+      : [],
+    motionRate: num(r.motionRate, 0, 1, 0),
+    sigilRing: str(r.sigilRing, 'none'),
+    sigilHalo: num(r.sigilHalo, 0, 1, 0),
+    corner: str(r.corner, 'none'),
+    nameCase: str(r.nameCase, 'normal'),
+    aura: num(r.aura, 0, 1, 0),
+    auraPulse: !!r.auraPulse,
+    seed: num(r.seed, 0, Number.MAX_SAFE_INTEGER, 0),
+  };
 }
 
 class ClockSyncHandler {

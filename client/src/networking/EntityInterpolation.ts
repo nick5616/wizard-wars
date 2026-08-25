@@ -7,6 +7,13 @@
 import { INTERPOLATION_DELAY } from 'shared/constants';
 import type { Vec3, PlayerState } from '../types/game.types';
 
+// How far past the newest known sample we'll dead-reckon a remote player
+// forward (using their last-known velocity) instead of freezing them in
+// place. Masks an ordinary WebSocket head-of-line stall/late tick without
+// letting a real lag-out or disconnect walk the player through a wall for
+// an unbounded amount of time -- past this, fall back to freezing.
+const MAX_EXTRAPOLATION_MS = 200;
+
 interface Sample {
   timestamp: number; // server time
   position: Vec3;
@@ -57,7 +64,34 @@ export class EntityInterpolation {
     }
 
     if (!before) return buf[0]; // too early — use oldest
-    if (!after) return before;  // too late or exact match
+
+    if (!after) {
+      // No newer sample yet -- the packet carrying the next position is
+      // late. Dead-reckon forward from the last two samples' velocity
+      // instead of freezing, so a brief stall doesn't read as a stutter.
+      const prev = buf.length >= 2 ? buf[buf.length - 2] : null;
+      const overdue = renderTime - before.timestamp;
+      const dtSample = prev ? before.timestamp - prev.timestamp : 0;
+      if (prev && dtSample > 0 && overdue > 0 && overdue <= MAX_EXTRAPOLATION_MS) {
+        const vx = (before.position.x - prev.position.x) / dtSample;
+        const vy = (before.position.y - prev.position.y) / dtSample;
+        const vz = (before.position.z - prev.position.z) / dtSample;
+        return {
+          timestamp: renderTime,
+          position: {
+            x: before.position.x + vx * overdue,
+            y: before.position.y + vy * overdue,
+            z: before.position.z + vz * overdue,
+          },
+          yaw: before.yaw,
+          pitch: before.pitch,
+          health: before.health,
+          isAlive: before.isAlive,
+          isChoosingBranch: before.isChoosingBranch,
+        };
+      }
+      return before; // exact match, or too far overdue -- freeze in place
+    }
 
     const t = (renderTime - before.timestamp) / (after.timestamp - before.timestamp);
     const clampedT = Math.max(0, Math.min(1, t));

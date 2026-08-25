@@ -91,8 +91,8 @@ export const HAT_BUFF_DURATION_MS = { 1: 6000, 2: 8000, 3: 10000 };
 // (its kit is mostly cheap tier-1/2 spells) so it gets the smallest pool but
 // the fastest regen relative to its size -- it was never meant to be
 // mana-gated the way the other four are.
-const MANA_BASE = { fire: 90, ice: 120, dark: 130, sword: 60, earth: 100 };
-const MANA_REGEN_BASE = { fire: 11, ice: 13, dark: 12, sword: 10, earth: 10 }; // per second
+const MANA_BASE = { fire: 90, ice: 120, dark: 130, sword: 60, druid: 100, crystalmancer: 100 };
+const MANA_REGEN_BASE = { fire: 11, ice: 13, dark: 12, sword: 10, druid: 10, crystalmancer: 10 }; // per second
 const MANA_PER_LEVEL = 7;
 const MANA_REGEN_PER_LEVEL = 0.5;
 

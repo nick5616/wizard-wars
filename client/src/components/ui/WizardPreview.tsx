@@ -77,10 +77,10 @@ function PreviewModel({ color, level, gemColor }: WizardPreviewProps) {
 export function WizardPreview({ color, level, gemColor }: WizardPreviewProps) {
   return (
     <Canvas
-      camera={{ fov: 38, position: [1.75, 1.5, 2.5] }}
+      camera={{ fov: 32, position: [2.7, 2.0, 3.7] }}
       gl={{ antialias: true }}
       style={{ width: '100%', height: '100%' }}
-      onCreated={({ camera }) => camera.lookAt(0, 1.05, 0)}
+      onCreated={({ camera }) => camera.lookAt(0, 1.2, 0)}
     >
       <Suspense fallback={null}>
         <ambientLight intensity={0.55} />

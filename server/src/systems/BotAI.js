@@ -107,6 +107,7 @@ export class BotController {
       if (pid === bot.id) continue;
       const p = this.room.server.players.get(pid);
       if (!p || !p.isAlive || p.isGodMode) continue;
+      if (bot.team != null && p.team === bot.team) continue; // never target a teammate
       const dx = p.position.x - bot.position.x, dz = p.position.z - bot.position.z;
       const dist = Math.sqrt(dx * dx + dz * dz);
       if (dist > SIGHT_RANGE) continue;

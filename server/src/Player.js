@@ -1,5 +1,5 @@
 import { PLAYER_MAX_HEALTH, BASE_MOVE_SPEED, PLAYER_HEIGHT, RESPAWN_DELAY, DEATH_NOTE_DAMAGE_WINDOW } from 'shared/constants';
-import { DEFAULT_EQUIPPED, MOBILITY_SPELL, MAX_SPELL_SLOTS } from 'shared/spells';
+import { DEFAULT_EQUIPPED, MOBILITY_SPELL, DEFENSIVE_SPELL, MAX_SPELL_SLOTS } from 'shared/spells';
 import { STATUS_EFFECTS } from 'shared/gameConfig';
 import { maxManaFor, manaRegenFor } from 'shared/leveling';
 
@@ -14,6 +14,7 @@ export class Player {
 
     // State
     this.class = null;
+    this.team = null; // match-scoped team id (see Room.setupMatch) -- null means "no team, hostile to everyone" (lobby/experiment rooms)
     this.isAlive = false;
     this.health = PLAYER_MAX_HEALTH;
     this.maxHealth = PLAYER_MAX_HEALTH;
@@ -24,6 +25,11 @@ export class Player {
     this.level = 1;
     this.divergedBranch = {}; // branchGroup -> chosen branch id
     this.unlockedNodes = new Set();
+    // Glossary lore entries revealed by spending a skill point on knowledge
+    // rather than an actual skill-tree unlock -- see C2S.REVEAL_LORE. Distinct
+    // from unlockedNodes: a spell can be "known" (lore visible) without being
+    // equippable, e.g. to preview what's ahead in the tree.
+    this.revealedLore = new Set();
     this.oncePerLifeUsed = new Set(); // e.g. 'death_note', 'phoenix'
 
     // Position / physics (server-side authoritative)
@@ -38,7 +44,19 @@ export class Player {
     this.equippedSpells = Array(MAX_SPELL_SLOTS).fill(null); // up to 10 active slots, opened as spells unlock
     this.activeSlot = 0; // currently selected hotbar slot -- drives the sniper-sight aim line
     this.mobilitySpell = null;
+    this.defensiveSpell = null;
     this.cooldowns = new Map(); // spellId → expiry timestamp
+
+    // Defensive spell (Q) state -- mirrors the ad-hoc parry fields below
+    // rather than activeEffects, since it needs a "consume on hit" primitive
+    // activeEffects doesn't have. Exactly one of these is active at a time,
+    // per player, per DEFENSIVE_SPELLS' three mechanical flavors -- see
+    // Room.applyDamage for how each mode is resolved.
+    this.defensiveActive = false;
+    this.defensiveExpiry = 0;
+    this.defensiveMode = null; // 'reduction' | 'absorb' | 'counter'
+    this.defensiveDamageReduction = 0; // 'reduction' mode: 0-1 fraction
+    this.defensiveAbsorbRemaining = 0; // 'absorb' mode: HP pool left
 
     // Status effects
     this.activeEffects = new Map(); // effectType → { expiresAt, stacks }
@@ -73,13 +91,15 @@ export class Player {
 
     // Passive counters
     this.keenEdgeCounter = 0; // sword: every 5th hit deals double
-    this.geologicStacks = 0; // earth: defense stacks per cast while below 4, resets on taking a hit
+    this.geologicStacks = 0; // crystalmancer: defense stacks per cast while below 4, resets on taking a hit
     this.kindlingStacks = 0; // fire: damage buff after Ember Flick
     this.kindlingExpiry = 0;
+    this.resonanceStacks = 0; // crystalmancer: damage buff after consecutive crystal-spell hits
+    this.resonanceExpiry = 0;
     this.immolateActiveUntil = 0; // fire: Immolate self-aura window, for Backdraft
     this.backdraftReadyAt = 0;
-    this.bedrock = false; // earth: standing still buff (true once the 1.5s idle timer has elapsed)
-    this.bedrockIdleSince = 0; // earth: timestamp movement last stopped
+    this.bedrock = false; // druid: standing still buff (true once the 1.5s idle timer has elapsed) -- field name predates the Rooted rename
+    this.bedrockIdleSince = 0; // druid: timestamp movement last stopped
     this.lastIceSpellCastAt = 0; // ice: flash_freeze — two ice spells within 1.5s
     this.nextPermafrostAt = 0; // ice: permafrost frost-trail tick timer
     this.ironWillExpiry = 0; // sword: -5% damage taken after a Warlord (blade_rain branch) spell
@@ -111,9 +131,11 @@ export class Player {
       xp: this.xp,
       skillPoints: this.skillPoints,
       unlockedNodes: [...this.unlockedNodes],
+      revealedLore: [...this.revealedLore],
       divergedBranch: { ...this.divergedBranch },
       equippedSpells: [...this.equippedSpells],
       mobilitySpell: this.mobilitySpell,
+      defensiveSpell: this.defensiveSpell,
       kills: this.kills,
     };
   }
@@ -127,9 +149,11 @@ export class Player {
     this.xp = persisted.xp ?? 0;
     this.skillPoints = persisted.skillPoints ?? 0;
     this.unlockedNodes = new Set(persisted.unlockedNodes ?? []);
+    this.revealedLore = new Set(persisted.revealedLore ?? []);
     this.divergedBranch = { ...(persisted.divergedBranch ?? {}) };
     if (Array.isArray(persisted.equippedSpells)) this.equippedSpells = [...persisted.equippedSpells];
     this.mobilitySpell = persisted.mobilitySpell ?? null;
+    this.defensiveSpell = persisted.defensiveSpell ?? null;
     this.kills = persisted.kills ?? 0;
   }
 
@@ -137,6 +161,7 @@ export class Player {
     this.class = className;
     this.equippedSpells = [...DEFAULT_EQUIPPED[className]];
     this.mobilitySpell = MOBILITY_SPELL[className];
+    this.defensiveSpell = DEFENSIVE_SPELL[className];
     this.divergedBranch = {};
     // Auto-unlock default spells so they can be re-equipped after unequipping
     for (const spellId of this.equippedSpells) {
@@ -177,6 +202,11 @@ export class Player {
     this.parryActive = false;
     this.lastParryTime = 0;
     this.lastParriedBy = null;
+    this.defensiveActive = false;
+    this.defensiveExpiry = 0;
+    this.defensiveMode = null;
+    this.defensiveDamageReduction = 0;
+    this.defensiveAbsorbRemaining = 0;
     this.isPhasing = false;
     this.phantomCasts = 0;
     this.keenEdgeCounter = 0;
@@ -286,6 +316,7 @@ export class Player {
       id: this.id,
       username: this.username,
       class: this.class,
+      team: this.team,
       isAlive: this.isAlive,
       health: this.health,
       maxHealth: this.maxHealth,
@@ -304,9 +335,13 @@ export class Player {
       xp: this.xp,
       divergedBranch: { ...this.divergedBranch },
       unlockedNodes: [...this.unlockedNodes],
+      revealedLore: [...this.revealedLore],
       kills: this.kills,
       ping: this.ping,
       isBot: false,
+      defensiveActive: this.defensiveActive && Date.now() < this.defensiveExpiry,
+      parryActive: this.parryActive && Date.now() < this.parryExpiry,
+      phantomCasts: this.phantomCasts,
     };
   }
 }

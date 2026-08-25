@@ -12,6 +12,7 @@ interface LocalPlayerState {
   mana: number;
   maxMana: number;
   class: WizardClass | null;
+  team: number | null;
   equippedSpells: (string | null)[];
   activeSlot: number;
   cooldowns: Record<string, number>; // ms remaining
@@ -22,9 +23,25 @@ interface LocalPlayerState {
   xp: number;
   divergedBranch: Record<string, string>;
   unlockedNodes: string[];
+  revealedLore: string[];
   kills: number;
   isAlive: boolean;
   position: Vec3;
+  defensiveActive: boolean;
+  parryActive: boolean;
+  phantomCasts: number;
+  moveCurveDeg: number; // live strafe-curve bend, for the Crosshair indicator -- see CameraController
+}
+
+export interface MatchResultPlayer {
+  id: string;
+  username: string;
+  class: WizardClass | null;
+  team: number | null;
+  isBot: boolean;
+  kills: number;
+  damageDealt: number;
+  isAlive: boolean;
 }
 
 export interface VoteOption {
@@ -77,17 +94,38 @@ interface GameState {
   local: LocalPlayerState;
 
   // UI state
-  phase: 'connecting' | 'class_select' | 'playing' | 'dead' | 'skill_tree';
+  phase: 'connecting' | 'main_menu' | 'mode_select' | 'class_select' | 'playing' | 'dead' | 'match_end' | 'skill_tree';
   killFeed: KillFeedEntry[];
   notifications: NotificationEntry[];
   voteState: VoteState | null;
   lastDeath: { killerName: string | null; killerSymbol: string | null; spellId: string | null } | null;
+
+  // Single-player vs-bots match state (see shared/gameModes.js). matchActive
+  // flips on when C2S.START_MATCH is sent and off on returning to the main
+  // menu; matchResult is populated when S2C.MATCH_END arrives.
+  matchActive: boolean;
+  setMatchActive: (v: boolean) => void;
+  matchResult: {
+    winningTeam: number | null;
+    // Team ids ranked 1st..last (winner first, then most-recently-eliminated
+    // teams down to the first team wiped) -- see Room._maybeEndMatch.
+    standings: number[];
+    players: MatchResultPlayer[];
+  } | null;
+  setMatchResult: (v: GameState['matchResult']) => void;
 
   // Set by GAME_TICK reconciliation, consumed and cleared by CameraController
   serverCorrectedPos: Vec3 | null;
 
   // Floating damage numbers
   damageNumbers: DamageNumber[];
+
+  // Client-predicted windup charge (set the instant a windup cast is sent,
+  // not waiting on server confirmation) -- purely cosmetic, drives the
+  // crosshair charge ring so a windup spell doesn't read as "nothing
+  // happened for half a second." See CameraController's cast block.
+  chargingSpell: { spellId: string; startedAt: number; windupMs: number } | null;
+  setChargingSpell: (v: GameState['chargingSpell']) => void;
 
   // Setters
   setPhase: (p: GameState['phase']) => void;
@@ -102,8 +140,10 @@ interface GameState {
   setVoteState: (v: VoteState | null) => void;
   setLastDeath: (v: GameState['lastDeath']) => void;
   setLocalPosition: (pos: Vec3) => void;
+  setLocalMoveCurve: (deg: number) => void;
   setLocalAlive: (v: boolean) => void;
   addUnlockedNode: (nodeId: string) => void;
+  addRevealedLore: (nodeId: string) => void;
   spawnDamageNumber: (x: number, y: number, z: number, value: number, isHeadshot?: boolean) => void;
   pruneDamageNumbers: () => void;
 
@@ -132,6 +172,7 @@ const defaultLocal: LocalPlayerState = {
   mana: 100,
   maxMana: 100,
   class: null,
+  team: null,
   equippedSpells: Array(MAX_SPELL_SLOTS).fill(null),
   activeSlot: 0,
   cooldowns: {},
@@ -142,9 +183,14 @@ const defaultLocal: LocalPlayerState = {
   xp: 0,
   divergedBranch: {},
   unlockedNodes: [],
+  revealedLore: [],
   kills: 0,
   isAlive: false,
   position: { x: 0, y: 1.8, z: 0 },
+  defensiveActive: false,
+  parryActive: false,
+  phantomCasts: 0,
+  moveCurveDeg: 0,
 };
 
 export const useGameStore = create<GameState>((set, get) => ({
@@ -163,6 +209,9 @@ export const useGameStore = create<GameState>((set, get) => ({
   lastDeath: null,
   serverCorrectedPos: null,
   damageNumbers: [],
+  chargingSpell: null,
+  matchActive: false,
+  matchResult: null,
   menuOpen: false,
   debugMode: false,
   birdsEyeView: false,
@@ -188,6 +237,7 @@ export const useGameStore = create<GameState>((set, get) => ({
         mana: localPlayer.mana,
         maxMana: localPlayer.maxMana,
         class: localPlayer.class,
+        team: localPlayer.team ?? null,
         equippedSpells: localPlayer.equippedSpells,
         cooldowns: localPlayer.cooldowns,
         activeEffects: localPlayer.activeEffects,
@@ -196,8 +246,12 @@ export const useGameStore = create<GameState>((set, get) => ({
         xp: localPlayer.xp,
         divergedBranch: localPlayer.divergedBranch,
         unlockedNodes: localPlayer.unlockedNodes,
+        revealedLore: localPlayer.revealedLore,
         kills: localPlayer.kills,
         isAlive: localPlayer.isAlive,
+        defensiveActive: !!localPlayer.defensiveActive,
+        parryActive: !!localPlayer.parryActive,
+        phantomCasts: localPlayer.phantomCasts ?? 0,
       } : s.local,
     }));
   },
@@ -245,10 +299,20 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   setLocalPosition: (pos) => set((s) => ({ local: { ...s.local, position: pos } })),
 
+  setLocalMoveCurve: (deg) => set((s) => (
+    s.local.moveCurveDeg === deg ? s : { local: { ...s.local, moveCurveDeg: deg } }
+  )),
+
   setLocalAlive: (v) => set((s) => ({ local: { ...s.local, isAlive: v } })),
+
+  setChargingSpell: (v) => set({ chargingSpell: v }),
 
   addUnlockedNode: (nodeId) => set((s) => ({
     local: { ...s.local, unlockedNodes: [...s.local.unlockedNodes, nodeId] },
+  })),
+
+  addRevealedLore: (nodeId) => set((s) => ({
+    local: { ...s.local, revealedLore: [...s.local.revealedLore, nodeId] },
   })),
 
   spawnDamageNumber: (x, y, z, value, isHeadshot = false) => set((s) => {
@@ -272,6 +336,8 @@ export const useGameStore = create<GameState>((set, get) => ({
     return next.length === s.damageNumbers.length ? s : { damageNumbers: next };
   }),
 
+  setMatchActive: (v) => set({ matchActive: v }),
+  setMatchResult: (v) => set({ matchResult: v }),
   setMenuOpen: (v) => set({ menuOpen: v }),
   setDebugMode: (v) => set({ debugMode: v }),
   setBirdsEyeView: (v) => set({ birdsEyeView: v }),

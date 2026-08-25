@@ -16,8 +16,8 @@ import type { Vec3, CastInput } from '../../types/game.types';
 import { INPUT_FLAGS } from 'shared/events';
 import type { WebSocketClient } from '../../networking/WebSocketClient';
 import { C2S } from 'shared/events';
-import { PLAYER_HEIGHT, CAST_MAX_RANGE, ARENA_RADIUS, TICK_RATE } from 'shared/constants';
-import { MOBILITY_SPELL, BASIC_ATTACK, MELEE_ATTACK, getSpell } from 'shared/spells';
+import { PLAYER_HEIGHT, CAST_MAX_RANGE, ARENA_RADIUS, TICK_RATE, BASE_MOVE_SPEED, MOVE_CURVE_SPEED_CAP, MAX_CURVE_DEG } from 'shared/constants';
+import { MOBILITY_SPELL, DEFENSIVE_SPELL, BASIC_ATTACK, MELEE_ATTACK, getSpell } from 'shared/spells';
 import { getTargetObjects } from '../../networking/targetRegistry';
 import { audioManager } from '../../audio/AudioManager';
 import { localOrientation } from '../../networking/localOrientation';
@@ -70,6 +70,7 @@ export function CameraController({ ws, prediction }: Props) {
   const raycasterRef = useRef(new THREE.Raycaster());
   const wasAliveRef = useRef(false);
   const wasShiftRef = useRef(false);
+  const wasQRef = useRef(false);
   const wasMeleeRef = useRef(false);
 
   const { local, setLocalPosition } = useGameStore.getState();
@@ -113,7 +114,7 @@ export function CameraController({ ws, prediction }: Props) {
 
   useFrame((_, delta) => {
     const dt = Math.min(delta, 0.05);
-    const { local, setLocalPosition, serverCorrectedPos, menuOpen } = useGameStore.getState();
+    const { local, setLocalPosition, setLocalMoveCurve, serverCorrectedPos, menuOpen } = useGameStore.getState();
 
     // While any menu is open: freeze all game input (no look, no move, no cast)
     if (menuOpen) return;
@@ -228,6 +229,17 @@ export function CameraController({ ws, prediction }: Props) {
     }
     setLocalPosition(result.pos);
 
+    // Live preview of the movement-curve tech (see SpellSystem._castProjectile
+    // server-side) so players can feel/learn how their current strafe would
+    // bend a shot before they even cast -- same yaw basis, same formula.
+    {
+      const yaw = yawRef.current;
+      const rightX = Math.cos(yaw), rightZ = -Math.sin(yaw);
+      const lateralSpeed = result.vel.x * rightX + result.vel.z * rightZ;
+      const lateralRatio = Math.max(-MOVE_CURVE_SPEED_CAP, Math.min(MOVE_CURVE_SPEED_CAP, lateralSpeed / BASE_MOVE_SPEED));
+      setLocalMoveCurve((lateralRatio / MOVE_CURVE_SPEED_CAP) * MAX_CURVE_DEG);
+    }
+
     // ── Send input to server at 64Hz ────────────────────────────────────────
     inputTickRef.current += dt;
     if (inputTickRef.current >= 1 / 64) {
@@ -264,6 +276,16 @@ export function CameraController({ ws, prediction }: Props) {
           // Direct-target spells (shatter, petrify, amaterasu, death_note) need a
           // targetId server-side -- raycast the crosshair against known remote players.
           const spellDef = getSpell(spellId);
+
+          // Windup spells (Siege Blade, ...) resolve silently server-side --
+          // no world effect exists until the windup elapses, which read as
+          // "nothing happened" for up to a second. This is a pure client
+          // prediction (no server round-trip) driving the crosshair charge
+          // ring, sword-only for now -- see Crosshair.tsx.
+          if (spellDef?.windupMs && spellDef.class === 'sword' && !(local.cooldowns[spellId] > 0)) {
+            useGameStore.getState().setChargingSpell({ spellId, startedAt: Date.now(), windupMs: spellDef.windupMs });
+          }
+
           if (spellDef?.requiresTarget) {
             // Ray from the actual eye position, not camera.position -- in
             // third-person the camera sits behind the player, and raycasting
@@ -326,6 +348,18 @@ export function CameraController({ ws, prediction }: Props) {
         }
       }
 
+      // Defensive spell: edge-trigger only on Q press, not hold -- same treatment as mobility
+      const defensiveFired = movement.defensive && !wasQRef.current;
+      wasQRef.current = movement.defensive;
+
+      if (defensiveFired && local.isAlive && local.class) {
+        const dSpellId = DEFENSIVE_SPELL[local.class];
+        const dSpell = dSpellId ? getSpell(dSpellId) : null;
+        if (dSpell && !debugMode && !(local.cooldowns[dSpellId] > 0)) {
+          useGameStore.getState().setLocalCooldown(dSpellId, dSpell.cooldown * 1000);
+        }
+      }
+
       pendingJumpEdgeRef.current = false; // this tick's flags already captured it above
 
       const seq = prediction.nextSeq();
@@ -337,6 +371,7 @@ export function CameraController({ ws, prediction }: Props) {
         pitch: pitchRef.current,
         cast,
         mobility: mobilityFired,
+        defensive: defensiveFired,
         basicAttack,
         melee,
         activeSlot: local.activeSlot,

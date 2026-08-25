@@ -16,7 +16,7 @@ import { UIButton } from './UIButton';
 import { TournamentBracket } from './TournamentBracket';
 
 const CLASS_COLORS: Record<WizardClass, string> = {
-  fire: '#ff4500', ice: '#a0d8ff', dark: '#cc00ff', sword: '#c8c8c8', earth: '#8B6914',
+  fire: '#ff4500', ice: '#a0d8ff', dark: '#cc00ff', sword: '#c8c8c8', druid: '#5a9e3d', crystalmancer: '#8fd4ff',
 };
 
 const BEHAVIORS = ['static', 'docile', 'aggressive'] as const;

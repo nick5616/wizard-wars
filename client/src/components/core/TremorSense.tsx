@@ -1,5 +1,5 @@
 /**
- * Earth's Tremor Sense passive: a faint pulsing ring at nearby enemies' feet,
+ * Crystalmancer's Tremor Sense passive: a faint pulsing ring at nearby enemies' feet,
  * visible even through walls (there's no line-of-sight/occlusion system in
  * this game at all — every player's exact position is already broadcast to
  * everyone every tick — so this is a UI-only "you'd notice them nearby" cue

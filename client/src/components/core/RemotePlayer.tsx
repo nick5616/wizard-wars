@@ -7,8 +7,9 @@ import { PLAYER_HEIGHT } from 'shared/constants';
 import { hatScaleForLevel } from 'shared/leveling';
 import { registerTarget, unregisterTarget } from '../../networking/targetRegistry';
 import { ArmAndWand } from './ArmAndWand';
+import { SwordBuffShards } from './SwordBuffShards';
 import { useCastAnimation } from '../../hooks/useCastAnimation';
-import { getSpell } from 'shared/spells';
+import { getSpell, DEFENSIVE_SPELL } from 'shared/spells';
 
 // Must mirror the private HAT_CONE_* / HAT_BASE_LOCAL_Y constants in
 // shared/leveling.js so the rendered hat lines up with where the server
@@ -31,7 +32,8 @@ const CLASS_COLORS: Record<string, string> = {
   ice: '#a0d8ff',
   dark: '#6600cc',
   sword: '#c8c8c8',
-  earth: '#8B6914',
+  druid: '#5a9e3d',
+  crystalmancer: '#8fd4ff',
   default: '#888888',
 };
 
@@ -55,6 +57,10 @@ export function RemotePlayer({ playerId, interpolation, serverNow, initialState 
   // is a fresh prop each network tick (see Scene.tsx), so this stays live.
   const activeSpellId = initialState.equippedSpells?.[initialState.activeSlot ?? 0] ?? null;
   const gemColor = (activeSpellId ? getSpell(activeSpellId)?.color : null) ?? color;
+
+  // Defensive spell (Q) visual cue -- same plain no-light translucent shell as LocalPlayerModel.
+  const defensiveSpellId = initialState.class ? DEFENSIVE_SPELL[initialState.class] : null;
+  const defensiveGlow = defensiveSpellId ? getSpell(defensiveSpellId)?.glowColor : null;
 
   useEffect(() => {
     if (groupRef.current) registerTarget(playerId, groupRef.current);
@@ -107,6 +113,22 @@ export function RemotePlayer({ playerId, interpolation, serverNow, initialState 
 
       {/* Class glow */}
       <pointLight position={[0, 1.5, 0]} intensity={0.5} distance={3} color={color} />
+
+      {/* Defensive spell (Q) active -- plain translucent shell, no light */}
+      {initialState.defensiveActive && defensiveGlow && (
+        <mesh position={[0, 1.0, 0]}>
+          <sphereGeometry args={[1.05, 16, 12]} />
+          <meshBasicMaterial color={defensiveGlow} transparent opacity={0.22} depthWrite={false} />
+        </mesh>
+      )}
+
+      {initialState.class === 'sword' && (
+        <SwordBuffShards
+          color={color}
+          parryActive={!!initialState.parryActive}
+          phantomCasts={initialState.phantomCasts ?? 0}
+        />
+      )}
 
       {/* Arm + wand — pose reacts to whatever spell type was just cast, gem tints to the selected spell */}
       <ArmAndWand color={color} gemColor={gemColor} castAnimRef={castAnimRef} />

@@ -4,7 +4,13 @@
  */
 
 // spell.type values:
-// projectile | beam | hitscan | aoe | domain | direct | passive | mobility | melee
+// projectile | arc | beam | hitscan | aoe | domain | direct | passive | mobility | melee | rune | defensive
+//
+// 'arc' is a gravity-affected projectile (lobbed) -- see SpellSystem._castProjectile
+// and tickProjectiles. Give it a `gravity: 'slight'|'normal'|'heavy'` field
+// (default 'normal', see shared/gameConfig.js PROJECTILE_GRAVITY) and treat
+// `speed` as its initial launch speed; the launch angle is auto-picked from
+// the caster's forward/backward movement, not aimed with the camera pitch.
 
 // Default mana cost by tier -- keeps ~90 spells from needing a hand-tuned
 // number each. Index = spell tier, clamped to the top band for anything
@@ -16,10 +22,11 @@ const manaForTier = (tier) => MANA_BY_TIER[Math.min(tier ?? 1, MANA_BY_TIER.leng
 const def = (d) => ({
   serverAuthoritative: true, interruptible: false, windupMs: 0, statusEffect: null, statusDuration: 0,
   selfCost: null, requiresTarget: false, radius: 0, duration: null, speed: null,
-  // Mobility lives outside the 4-slot economy already (triggered by Shift,
-  // never equipped) -- same treatment as basic attack/melee (tier 0, so they
-  // fall out to 0 mana naturally below), it doesn't draw from mana either.
-  manaCost: d.type === 'mobility' ? 0 : manaForTier(d.tier),
+  // Mobility and defensive spells live outside the 4-slot economy already
+  // (triggered by Shift / Q, never equipped) -- same treatment as basic
+  // attack/melee (tier 0, so they fall out to 0 mana naturally below), they
+  // don't draw from mana either.
+  manaCost: d.type === 'mobility' || d.type === 'defensive' ? 0 : manaForTier(d.tier),
   ...d,
 });
 
@@ -33,7 +40,7 @@ export const FIRE_SPELLS = {
   }),
   fireball: def({
     id: 'fireball', name: 'Fireball', school: 'fire', tier: 2, class: 'fire',
-    type: 'projectile', damage: 85, cooldown: 2.2, speed: 18, radius: 2.5,
+    type: 'arc', gravity: 'normal', damage: 85, cooldown: 2.2, speed: 24, radius: 2.5,
     statusEffect: 'burn', statusDuration: 1500,
     color: '#ff4500', glowColor: '#ff8c00',
   }),
@@ -198,6 +205,14 @@ export const ICE_SPELLS = {
     statusEffect: 'freeze', statusDuration: 2000,
     color: '#00c8ff', glowColor: '#ffffff',
   }),
+  glacial_lob: def({
+    id: 'glacial_lob', name: 'Glacial Lob', school: 'ice', tier: 2, class: 'ice',
+    // Arced ice boulder -- shatters into a frost-nova slow field wherever it lands
+    // (see SpellSystem._explodeAtPosition, triggers on any floor impact with radius > 0.8).
+    type: 'arc', gravity: 'normal', damage: 55, cooldown: 3.0, speed: 20, radius: 1.4,
+    statusEffect: 'slow', statusDuration: 1800,
+    color: '#a0d8ff', glowColor: '#00c8ff',
+  }),
 };
 
 // ─── DARK ──────────────────────────────────────────────────────────────────
@@ -288,6 +303,13 @@ export const DARK_SPELLS = {
     lifesteal: 0.8,
     color: '#220044', glowColor: '#cc00ff',
   }),
+  hex_bomb: def({
+    id: 'hex_bomb', name: 'Hex Bomb', school: 'dark', tier: 2, class: 'dark',
+    // Lobbed void orb -- onImpact reuses Void Bloom's pull-together tendril zone.
+    type: 'arc', gravity: 'normal', damage: 50, cooldown: 3.0, speed: 18, radius: 2.2,
+    onImpact: 'void_tendrils',
+    color: '#4400aa', glowColor: '#6600cc',
+  }),
 };
 
 // ─── SWORD ─────────────────────────────────────────────────────────────────
@@ -371,80 +393,166 @@ export const SWORD_SPELLS = {
     statusEffect: 'stun', statusDuration: 1200,
     color: '#ffffff', glowColor: '#c8c8ff',
   }),
+  thrown_blade: def({
+    id: 'thrown_blade', name: 'Thrown Blade', school: 'sword', tier: 2, class: 'sword',
+    // Flat, hard-thrown spinning blade -- lighter gravity than Fireball, a
+    // quicker/flatter arc rather than a high lob. Direct-hit only, no AoE.
+    type: 'arc', gravity: 'slight', damage: 70, cooldown: 2.0, speed: 26, radius: 0.5,
+    color: '#c8c8c8', glowColor: '#ffffff',
+  }),
 };
 
-// ─── EARTH ─────────────────────────────────────────────────────────────────
+// ─── DRUID ─────────────────────────────────────────────────────────────────
+// Nature/control/sustain half of the former "earth" class.
 
-export const EARTH_SPELLS = {
-  pebble_shot: def({
-    id: 'pebble_shot', name: 'Pebble Shot', school: 'earth', tier: 1, class: 'earth',
+export const DRUID_SPELLS = {
+  thorn_dart: def({
+    id: 'thorn_dart', name: 'Thorn Dart', school: 'druid', tier: 1, class: 'druid',
     type: 'projectile', damage: 28, cooldown: 0.6, speed: 25, radius: 0.35,
-    color: '#8B6914', glowColor: '#a08030',
+    color: '#5a9e3d', glowColor: '#8fd15a',
   }),
-  stone_spire: def({
-    id: 'stone_spire', name: 'Stone Spire', school: 'earth', tier: 2, class: 'earth',
+  seed_burst: def({
+    id: 'seed_burst', name: 'Seed Burst', school: 'druid', tier: 2, class: 'druid',
+    type: 'projectile', damage: 9, cooldown: 0.18, speed: 30, radius: 0.22,
+    spreadCount: 3, spreadAngle: 18,
+    color: '#7cb342', glowColor: '#a5d66b',
+  }),
+  spore_pod: def({
+    id: 'spore_pod', name: 'Spore Pod', school: 'druid', tier: 2.5, class: 'druid',
+    // Lobbed seed pod -- blooms into a brief entangling root patch on impact.
+    type: 'arc', gravity: 'normal', damage: 45, cooldown: 3.2, speed: 19, radius: 1.6,
+    statusEffect: 'slow', statusDuration: 2200,
+    color: '#5a9e3d', glowColor: '#8fd15a',
+  }),
+  bramble_burst: def({
+    id: 'bramble_burst', name: 'Bramble Burst', school: 'druid', tier: 3, class: 'druid',
     type: 'aoe', damage: 75, cooldown: 3.0, radius: 1.5, windupMs: 400,
-    color: '#8B6914', glowColor: '#6B5010',
-  }),
-  rock_wall: def({
-    id: 'rock_wall', name: 'Rock Wall', school: 'earth', tier: 3, class: 'earth',
-    type: 'aoe', damage: 0, cooldown: 10.0, duration: 15.0,
-    isBarrier: true, barrierHealth: 240, requiresBreaks: 2,
-    color: '#6B5010', glowColor: '#8B6914',
+    color: '#3d6e2a', glowColor: '#5a9e3d',
   }),
   avalanche: def({
-    id: 'avalanche', name: 'Avalanche', school: 'earth', tier: 4, class: 'earth',
+    id: 'avalanche', name: 'Avalanche', school: 'druid', tier: 4, class: 'druid',
     type: 'projectile', damage: 140, cooldown: 6.0, speed: 10, radius: 3.5,
     statusEffect: 'stun', statusDuration: 600,
     color: '#8B6914', glowColor: '#6B5010',
   }),
-  petrify: def({
-    id: 'petrify', name: 'Petrify', school: 'earth', tier: 5, class: 'earth',
+  root_snare: def({
+    id: 'root_snare', name: 'Root Snare', school: 'druid', tier: 5, class: 'druid',
     type: 'direct', damage: 0, cooldown: 12.0, requiresTarget: true, windupMs: 800,
+    // Same "encased, fully immobilized" mechanic as the old Petrify -- here it's roots, not stone.
     statusEffect: 'petrify', statusDuration: 2500,
-    color: '#8B6914', glowColor: '#a08030',
+    color: '#3d6e2a', glowColor: '#8fd15a',
   }),
   fissure: def({
-    id: 'fissure', name: 'Fissure', school: 'earth', tier: 6, class: 'earth',
+    id: 'fissure', name: 'Fissure', school: 'druid', tier: 6, class: 'druid',
     type: 'aoe', damage: 60, cooldown: 7.0, radius: 1.5, length: 12,
     statusEffect: 'airborne', statusDuration: 1200,
     color: '#6B5010', glowColor: '#8B6914',
   }),
-  terra_domain: def({
-    id: 'terra_domain', name: 'Terra Domain', school: 'earth', tier: 7, class: 'earth',
+  wildwood_domain: def({
+    id: 'wildwood_domain', name: 'Wildwood Domain', school: 'druid', tier: 7, class: 'druid',
     type: 'domain', damage: 45, cooldown: 80.0, duration: 5.0,
-    color: '#8B6914', glowColor: '#6B5010',
+    color: '#3d6e2a', glowColor: '#5a9e3d',
   }),
-  the_monolith: def({
-    id: 'the_monolith', name: 'The Monolith', school: 'earth', tier: 8, class: 'earth',
+  verdant_lance: def({
+    id: 'verdant_lance', name: 'Verdant Lance', school: 'druid', tier: 8, class: 'druid',
     type: 'hitscan', damage: 280, cooldown: 16.0, sniperSight: true,
     windupMs: 1000, // visible for a full second
     statusEffect: 'slow', statusDuration: 3000,
-    color: '#8B6914', glowColor: '#6B5010',
+    color: '#3d6e2a', glowColor: '#5a9e3d',
   }),
-  stone_launch: def({
-    id: 'stone_launch', name: 'Stone Launch', school: 'earth', tier: 1, class: 'earth',
+  root_launch: def({
+    id: 'root_launch', name: 'Root Launch', school: 'druid', tier: 1, class: 'druid',
     type: 'mobility', damage: 10, cooldown: 1.8, duration: 0.5,
     effect: 'launch_upward', launchForce: 20,
-    color: '#8B6914', glowColor: '#a08030',
-  }),
-  dirt_clod: def({
-    id: 'dirt_clod', name: 'Dirt Clod', school: 'earth', tier: 2, class: 'earth',
-    type: 'projectile', damage: 9, cooldown: 0.18, speed: 30, radius: 0.22,
-    spreadCount: 3, spreadAngle: 18,
-    color: '#aa8822', glowColor: '#cc9933',
+    color: '#5a9e3d', glowColor: '#8fd15a',
   }),
   rune_root: def({
-    id: 'rune_root', name: 'Root Rune', school: 'earth', tier: 2, class: 'earth',
+    id: 'rune_root', name: 'Root Rune', school: 'druid', tier: 2, class: 'druid',
     type: 'rune', damage: 45, cooldown: 7.0, radius: 2.2, armMs: 400, duration: 18000,
     statusEffect: 'stun', statusDuration: 500,
-    color: '#8B6914', glowColor: '#a08030',
+    color: '#5a9e3d', glowColor: '#8fd15a',
   }),
   rune_seismic: def({
-    id: 'rune_seismic', name: 'Seismic Rune', school: 'earth', tier: 11, class: 'earth',
+    id: 'rune_seismic', name: 'Seismic Rune', school: 'druid', tier: 11, class: 'druid',
     type: 'rune', damage: 150, cooldown: 15.0, radius: 3.5, armMs: 500, duration: 20000,
     statusEffect: 'stun', statusDuration: 1000,
-    color: '#6B5010', glowColor: '#8B6914',
+    color: '#3d6e2a', glowColor: '#5a9e3d',
+  }),
+};
+
+// ─── CRYSTALMANCER ───────────────────────────────────────────────────────────
+// Crystal/burst/reflect half of the former "earth" class.
+
+export const CRYSTALMANCER_SPELLS = {
+  crystal_shard: def({
+    id: 'crystal_shard', name: 'Crystal Shard', school: 'crystalmancer', tier: 1, class: 'crystalmancer',
+    type: 'projectile', damage: 28, cooldown: 0.6, speed: 25, radius: 0.35,
+    color: '#8fd4ff', glowColor: '#c8f0ff',
+  }),
+  shard_burst: def({
+    id: 'shard_burst', name: 'Shard Burst', school: 'crystalmancer', tier: 2, class: 'crystalmancer',
+    type: 'projectile', damage: 9, cooldown: 0.18, speed: 30, radius: 0.22,
+    spreadCount: 3, spreadAngle: 18,
+    color: '#a8dfff', glowColor: '#d8f4ff',
+  }),
+  geode_bomb: def({
+    id: 'geode_bomb', name: 'Geode Bomb', school: 'crystalmancer', tier: 2.5, class: 'crystalmancer',
+    // Lobbed crystal -- falls fast (heavy gravity) and shatters into a shrapnel burst.
+    type: 'arc', gravity: 'heavy', damage: 65, cooldown: 3.5, speed: 17, radius: 1.8,
+    color: '#8fd4ff', glowColor: '#c8f0ff',
+  }),
+  crystal_spire: def({
+    id: 'crystal_spire', name: 'Crystal Spire', school: 'crystalmancer', tier: 3, class: 'crystalmancer',
+    type: 'aoe', damage: 75, cooldown: 3.0, radius: 1.5, windupMs: 400,
+    color: '#6fb8e0', glowColor: '#8fd4ff',
+  }),
+  crystal_wall: def({
+    id: 'crystal_wall', name: 'Crystal Wall', school: 'crystalmancer', tier: 4, class: 'crystalmancer',
+    type: 'aoe', damage: 0, cooldown: 10.0, duration: 15.0,
+    isBarrier: true, barrierHealth: 240, requiresBreaks: 2,
+    color: '#6fb8e0', glowColor: '#8fd4ff',
+  }),
+  petrify: def({
+    id: 'petrify', name: 'Petrify', school: 'crystalmancer', tier: 5, class: 'crystalmancer',
+    type: 'direct', damage: 0, cooldown: 12.0, requiresTarget: true, windupMs: 800,
+    statusEffect: 'petrify', statusDuration: 2500,
+    color: '#8fd4ff', glowColor: '#c8f0ff',
+  }),
+  shard_fracture: def({
+    id: 'shard_fracture', name: 'Shard Fracture', school: 'crystalmancer', tier: 6, class: 'crystalmancer',
+    type: 'aoe', damage: 60, cooldown: 7.0, radius: 1.5, length: 12,
+    statusEffect: 'airborne', statusDuration: 1200,
+    color: '#6fb8e0', glowColor: '#8fd4ff',
+  }),
+  prism_field: def({
+    id: 'prism_field', name: 'Prism Field', school: 'crystalmancer', tier: 7, class: 'crystalmancer',
+    type: 'domain', damage: 45, cooldown: 80.0, duration: 5.0,
+    color: '#8fd4ff', glowColor: '#6fb8e0',
+  }),
+  the_monolith: def({
+    id: 'the_monolith', name: 'The Monolith', school: 'crystalmancer', tier: 8, class: 'crystalmancer',
+    type: 'hitscan', damage: 280, cooldown: 16.0, sniperSight: true,
+    windupMs: 1000, // visible for a full second
+    statusEffect: 'slow', statusDuration: 3000,
+    color: '#8fd4ff', glowColor: '#6fb8e0',
+  }),
+  rune_shard: def({
+    id: 'rune_shard', name: 'Shard Rune', school: 'crystalmancer', tier: 2, class: 'crystalmancer',
+    type: 'rune', damage: 45, cooldown: 7.0, radius: 2.2, armMs: 400, duration: 18000,
+    statusEffect: 'stun', statusDuration: 500,
+    color: '#8fd4ff', glowColor: '#c8f0ff',
+  }),
+  crystal_launch: def({
+    id: 'crystal_launch', name: 'Crystal Launch', school: 'crystalmancer', tier: 1, class: 'crystalmancer',
+    type: 'mobility', damage: 10, cooldown: 1.8, duration: 0.5,
+    effect: 'launch_upward', launchForce: 20,
+    color: '#8fd4ff', glowColor: '#c8f0ff',
+  }),
+  rune_prism: def({
+    id: 'rune_prism', name: 'Prism Rune', school: 'crystalmancer', tier: 11, class: 'crystalmancer',
+    type: 'rune', damage: 150, cooldown: 15.0, radius: 3.5, armMs: 500, duration: 20000,
+    statusEffect: 'stun', statusDuration: 1000,
+    color: '#6fb8e0', glowColor: '#8fd4ff',
   }),
 };
 
@@ -461,7 +569,8 @@ export const BASIC_ATTACKS = {
   ice_frost_flick:    def({ id: 'ice_frost_flick',    name: 'Frost Flick',   school: 'ice',   tier: 0, class: 'ice',   type: 'hitscan', damage: 10, cooldown: 0.2, color: '#cceeff', glowColor: '#88ccff' }),
   dark_void_lash:     def({ id: 'dark_void_lash',     name: 'Void Lash',     school: 'dark',  tier: 0, class: 'dark',  type: 'hitscan', damage: 10, cooldown: 0.2, color: '#aa66ff', glowColor: '#6600cc' }),
   sword_dagger_flick: def({ id: 'sword_dagger_flick', name: 'Dagger Flick',  school: 'sword', tier: 0, class: 'sword', type: 'hitscan', damage: 10, cooldown: 0.2, color: '#dddddd', glowColor: '#ffffff' }),
-  earth_stone_chip:   def({ id: 'earth_stone_chip',   name: 'Stone Chip',    school: 'earth', tier: 0, class: 'earth', type: 'hitscan', damage: 10, cooldown: 0.2, color: '#c2a05a', glowColor: '#8B6914' }),
+  druid_thorn_sting:  def({ id: 'druid_thorn_sting',  name: 'Thorn Sting',   school: 'druid', tier: 0, class: 'druid', type: 'hitscan', damage: 10, cooldown: 0.2, color: '#8fd15a', glowColor: '#5a9e3d' }),
+  crystal_shard_chip: def({ id: 'crystal_shard_chip', name: 'Shard Chip',    school: 'crystalmancer', tier: 0, class: 'crystalmancer', type: 'hitscan', damage: 10, cooldown: 0.2, color: '#c8f0ff', glowColor: '#8fd4ff' }),
 };
 
 export const MELEE_ATTACKS = {
@@ -469,15 +578,81 @@ export const MELEE_ATTACKS = {
   ice_punch:            def({ id: 'ice_punch',            name: 'Punch',           school: 'ice',   tier: 0, class: 'ice',   type: 'melee', damage: 18, cooldown: 0.6, radius: 2.2, color: '#a0d8ff', glowColor: '#ffffff' }),
   dark_punch:           def({ id: 'dark_punch',           name: 'Punch',           school: 'dark',  tier: 0, class: 'dark',  type: 'melee', damage: 18, cooldown: 0.6, radius: 2.2, color: '#6600cc', glowColor: '#aa00ff' }),
   sword_pommel_strike:  def({ id: 'sword_pommel_strike',  name: 'Pommel Strike',   school: 'sword', tier: 0, class: 'sword', type: 'melee', damage: 18, cooldown: 0.6, radius: 2.2, color: '#c8c8c8', glowColor: '#ffffff' }),
-  earth_punch:          def({ id: 'earth_punch',          name: 'Punch',           school: 'earth', tier: 0, class: 'earth', type: 'melee', damage: 18, cooldown: 0.6, radius: 2.2, color: '#8B6914', glowColor: '#a08030' }),
+  bramble_strike:       def({ id: 'bramble_strike',       name: 'Bramble Strike',  school: 'druid', tier: 0, class: 'druid', type: 'melee', damage: 18, cooldown: 0.6, radius: 2.2, color: '#5a9e3d', glowColor: '#8fd15a' }),
+  crystal_fist:         def({ id: 'crystal_fist',         name: 'Crystal Fist',    school: 'crystalmancer', tier: 0, class: 'crystalmancer', type: 'melee', damage: 18, cooldown: 0.6, radius: 2.2, color: '#8fd4ff', glowColor: '#c8f0ff' }),
 };
 
 export const BASIC_ATTACK = {
-  fire: 'fire_spark_poke', ice: 'ice_frost_flick', dark: 'dark_void_lash', sword: 'sword_dagger_flick', earth: 'earth_stone_chip',
+  fire: 'fire_spark_poke', ice: 'ice_frost_flick', dark: 'dark_void_lash', sword: 'sword_dagger_flick',
+  druid: 'druid_thorn_sting', crystalmancer: 'crystal_shard_chip',
 };
 
 export const MELEE_ATTACK = {
-  fire: 'fire_punch', ice: 'ice_punch', dark: 'dark_punch', sword: 'sword_pommel_strike', earth: 'earth_punch',
+  fire: 'fire_punch', ice: 'ice_punch', dark: 'dark_punch', sword: 'sword_pommel_strike',
+  druid: 'bramble_strike', crystalmancer: 'crystal_fist',
+};
+
+// ─── Defensive spells (triggered by Q, not in regular slots) ───────────────
+// One fixed, always-available defensive spell per class -- same "outside the
+// slot system" treatment as mobility, just bound to a different key. Every
+// class gets exactly one, no choice, no unlock required. Three mechanical
+// flavors: `damageReduction` (a % taken-damage cut for `duration`),
+// `absorbAmount` (a flat HP shield pool that soaks hits until it runs out or
+// `duration` expires), and `fullCounter` (negates the next hit entirely and
+// reflects its damage back at the attacker -- see Room.applyDamage).
+export const DEFENSIVE_SPELLS = {
+  flame_ward: def({
+    id: 'flame_ward', name: 'Flame Ward', school: 'fire', tier: 1, class: 'fire',
+    type: 'defensive', damage: 0, cooldown: 14.0, duration: 4.0, selfCast: true,
+    damageReduction: 0.4,
+    color: '#ff6b2b', glowColor: '#ffb347',
+  }),
+  ice_barrier: def({
+    id: 'ice_barrier', name: 'Ice Barrier', school: 'ice', tier: 1, class: 'ice',
+    type: 'defensive', damage: 0, cooldown: 16.0, duration: 7.0, selfCast: true,
+    absorbAmount: 90,
+    color: '#a0d8ff', glowColor: '#d8f4ff',
+  }),
+  // Dark: a hard parry against everything, not just projectiles (unlike
+  // Sword's primary-tree Parry, which only reflects projectiles) -- negates
+  // the next hit outright and throws its damage back at whoever landed it.
+  // Short window, long cooldown: a trump card, not a habit.
+  umbral_counter: def({
+    id: 'umbral_counter', name: 'Umbral Counter', school: 'dark', tier: 1, class: 'dark',
+    type: 'defensive', damage: 0, cooldown: 20.0, duration: 1.2, selfCast: true,
+    fullCounter: true,
+    color: '#6600cc', glowColor: '#ff44ff',
+  }),
+  // Sword: a physical guard, distinct from the primary-tree Parry (which
+  // only reflects the next projectile) -- flat mitigation against anything,
+  // shorter window, shorter cooldown.
+  blade_guard: def({
+    id: 'blade_guard', name: 'Blade Guard', school: 'sword', tier: 1, class: 'sword',
+    type: 'defensive', damage: 0, cooldown: 12.0, duration: 2.5, selfCast: true,
+    damageReduction: 0.55,
+    color: '#c8c8c8', glowColor: '#eeeeee',
+  }),
+  crystal_shield: def({
+    id: 'crystal_shield', name: 'Crystal Shield', school: 'crystalmancer', tier: 1, class: 'crystalmancer',
+    type: 'defensive', damage: 0, cooldown: 18.0, duration: 8.0, selfCast: true,
+    absorbAmount: 110,
+    color: '#8fd4ff', glowColor: '#ff8fd4',
+  }),
+  bark_ward: def({
+    id: 'bark_ward', name: 'Bark Ward', school: 'druid', tier: 1, class: 'druid',
+    type: 'defensive', damage: 0, cooldown: 18.0, duration: 8.0, selfCast: true,
+    absorbAmount: 110,
+    color: '#5a9e3d', glowColor: '#8fd15a',
+  }),
+};
+
+export const DEFENSIVE_SPELL = {
+  fire:  'flame_ward',
+  ice:   'ice_barrier',
+  dark:  'umbral_counter',
+  sword: 'blade_guard',
+  druid: 'bark_ward',
+  crystalmancer: 'crystal_shield',
 };
 
 // ─── All spells flat map ────────────────────────────────────────────────────
@@ -487,9 +662,11 @@ export const ALL_SPELLS = {
   ...ICE_SPELLS,
   ...DARK_SPELLS,
   ...SWORD_SPELLS,
-  ...EARTH_SPELLS,
+  ...DRUID_SPELLS,
+  ...CRYSTALMANCER_SPELLS,
   ...BASIC_ATTACKS,
   ...MELEE_ATTACKS,
+  ...DEFENSIVE_SPELLS,
 };
 
 export const getSpell = (id) => ALL_SPELLS[id] ?? null;
@@ -497,8 +674,8 @@ export const getSpell = (id) => ALL_SPELLS[id] ?? null;
 /** Equip slots are keyed off the top-row digits 1-9 then 0, so 10 is the hard cap. */
 export const MAX_SPELL_SLOTS = 10;
 
-/** True for spells that belong in a regular equip slot (excludes passives and the Shift mobility spell). */
-export const isEquippableSpell = (spell) => spell.type !== 'passive' && spell.type !== 'mobility';
+/** True for spells that belong in a regular equip slot (excludes passives and the Shift mobility / Q defensive spells). */
+export const isEquippableSpell = (spell) => spell.type !== 'passive' && spell.type !== 'mobility' && spell.type !== 'defensive';
 
 // Default starting spells per class (slot index → spell id). Padded to
 // MAX_SPELL_SLOTS -- remaining slots open up as the player unlocks more spells.
@@ -507,7 +684,8 @@ export const DEFAULT_EQUIPPED = {
   ice:   ['frost_bite', 'glacial_spike', ...Array(MAX_SPELL_SLOTS - 2).fill(null)],
   dark:  ['void_touch', 'soul_drain', ...Array(MAX_SPELL_SLOTS - 2).fill(null)],
   sword: ['iron_edge', 'bladestorm', ...Array(MAX_SPELL_SLOTS - 2).fill(null)],
-  earth: ['pebble_shot', 'stone_spire', ...Array(MAX_SPELL_SLOTS - 2).fill(null)],
+  druid: ['thorn_dart', 'bramble_burst', ...Array(MAX_SPELL_SLOTS - 2).fill(null)],
+  crystalmancer: ['crystal_shard', 'crystal_spire', ...Array(MAX_SPELL_SLOTS - 2).fill(null)],
 };
 
 // Mobility spells per class (triggered by Shift, not in regular slots)
@@ -516,5 +694,6 @@ export const MOBILITY_SPELL = {
   ice:   'glacier_step',
   dark:  'phase_slip',
   sword: 'lunge',
-  earth: 'stone_launch',
+  druid: 'root_launch',
+  crystalmancer: 'crystal_launch',
 };

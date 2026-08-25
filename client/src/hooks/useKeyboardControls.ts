@@ -9,6 +9,7 @@ export interface MovementState {
   right: boolean;
   jumping: boolean;
   mobility: boolean; // Shift = class mobility spell
+  defensive: boolean; // Q = class defensive spell
   melee: boolean; // F = melee punch
 }
 
@@ -25,6 +26,7 @@ const KEY_MAP: Record<string, keyof MovementState> = {
   KeyD: 'right', ArrowRight: 'right',
   Space: 'jumping',
   ShiftLeft: 'mobility', ShiftRight: 'mobility',
+  KeyQ: 'defensive',
   KeyF: 'melee',
 };
 
@@ -38,7 +40,7 @@ const DIGIT_TO_SLOT: Record<string, number> = {
 export function useKeyboardControls() {
   const [movement, setMovement] = useState<MovementState>({
     forward: false, backward: false, left: false, right: false,
-    jumping: false, mobility: false, melee: false,
+    jumping: false, mobility: false, defensive: false, melee: false,
   });
 
   const onKeyDown = useCallback((e: KeyboardEvent) => {

@@ -159,18 +159,19 @@ export class GameServer {
     this.persistPlayer(player);
     if (player.roomId) {
       this.rooms.get(player.roomId)?.removePlayer(player.id);
-      this.cleanupEmptyExperimentRoom(player.roomId);
+      this.cleanupEmptyPrivateRoom(player.roomId);
     }
     this.players.delete(player.id);
   }
 
   /**
-   * Experiment Lab rooms are private per-player sandboxes — tear them down
-   * (bots included) once nobody real is left in them, rather than leaking a
-   * running GameLoop forever. Safe to call for any roomId; no-ops otherwise.
+   * Experiment Lab sandboxes and single-player match rooms are both private
+   * per-player rooms — tear them down (bots included) once nobody real is
+   * left in them, rather than leaking a running GameLoop forever. Safe to
+   * call for any roomId; no-ops otherwise (e.g. the shared 'lobby').
    */
-  cleanupEmptyExperimentRoom(roomId) {
-    if (!roomId || !roomId.startsWith('experiment-')) return;
+  cleanupEmptyPrivateRoom(roomId) {
+    if (!roomId || !(roomId.startsWith('experiment-') || roomId.startsWith('match-'))) return;
     const room = this.rooms.get(roomId);
     if (!room) return;
     const hasRealPlayer = [...room.playerIds].some((pid) => !this.players.get(pid)?.isBot);
