@@ -145,6 +145,16 @@ export function CameraController({ ws, prediction }: Props) {
       velRef.current = { x: 0, y: 0, z: 0 };
       airJumpsUsedRef.current = 0;
       moveAccumRef.current = 0;
+
+      // Match spawns pick a facing (see Room.setupMatch/setupDuel) instead of
+      // leaving the camera pointed wherever it last happened to look --
+      // level the pitch out too so a fresh spawn always looks straight ahead.
+      const { spawnYaw } = useGameStore.getState();
+      if (spawnYaw != null) {
+        yawRef.current = spawnYaw;
+        pitchRef.current = 0;
+        useGameStore.setState({ spawnYaw: null });
+      }
     }
     wasAliveRef.current = local.isAlive;
 

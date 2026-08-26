@@ -11,6 +11,7 @@ import { UIButton } from './UIButton';
 import { audioManager } from '../../audio/AudioManager';
 import { legibleAccent } from '../../utils/legibleColor';
 import { SpellTypeIcon, iconKindForSpellId } from './SpellTypeIcon';
+import { TITLE_FONT, BODY_FONT } from '../../styles/fonts';
 
 interface SkillVotePromptProps {
   ws: WebSocketClient;
@@ -120,7 +121,7 @@ function ForkChoiceScreen({ voteState, onChoose }: { voteState: VoteState; onCho
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        fontFamily: "'Courier New', monospace",
+        fontFamily: BODY_FONT,
         background: `radial-gradient(circle at 25% 50%, ${panels[0]?.color ?? baseColor}22, transparent 55%),
                      radial-gradient(circle at 75% 50%, ${panels[1]?.color ?? baseColor}22, transparent 55%),
                      rgba(2,2,8,0.97)`,
@@ -140,6 +141,7 @@ function ForkChoiceScreen({ voteState, onChoose }: { voteState: VoteState; onCho
         </div>
         <div
           style={{
+            fontFamily: TITLE_FONT,
             fontSize: 42,
             fontWeight: 'bold',
             letterSpacing: 5,
@@ -175,7 +177,7 @@ function ForkChoiceScreen({ voteState, onChoose }: { voteState: VoteState; onCho
                 cursor: 'pointer',
                 textAlign: 'left',
                 color: '#ddd',
-                fontFamily: "'Courier New', monospace",
+                fontFamily: BODY_FONT,
                 animation: `wwv-rise 420ms ease-out ${i * 90}ms both, wwv-pulse-border 2.6s ease-in-out infinite`,
                 '--wwv-glow': `${color}33`,
               } as CSSProperties
@@ -243,7 +245,7 @@ function PointSpendPrompt({ voteState, onChoose }: { voteState: VoteState; onCho
       bottom: 178, // sits just above the HP/Level/Mana well cluster (see StatusWells)
       width: 300,
       zIndex: 160,
-      fontFamily: "'Courier New', monospace",
+      fontFamily: BODY_FONT,
       background: 'rgba(6,6,16,0.94)',
       border: `1px solid ${baseColor}55`,
       borderRadius: 6,
@@ -269,7 +271,7 @@ function PointSpendPrompt({ voteState, onChoose }: { voteState: VoteState; onCho
             borderRadius: 4,
             cursor: 'pointer',
             textAlign: 'left',
-            fontFamily: "'Courier New', monospace",
+            fontFamily: BODY_FONT,
           }}
         >
           <span style={{

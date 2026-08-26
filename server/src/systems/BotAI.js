@@ -5,6 +5,13 @@ import { ARENA_RADIUS, CAST_MAX_RANGE } from 'shared/constants';
 const DECISION_INTERVAL_MS = 150;
 const AIM_INACCURACY_RAD = 0.03; // small cone of error so bots don't feel laser-perfect
 const SIGHT_RANGE = 45;
+// Bots used to attempt an action on essentially every decision tick, which
+// read as nonstop spell-spam. Only actually try to act on ~10% of ticks --
+// aim/movement (handled by the caller, _decide) stay smooth regardless, so
+// bots still track and reposition normally, they just attack far less
+// often. Applies uniformly across every difficulty/behavior that reaches
+// _chooseAction at all (docile bots never call it, see _decide).
+const ACTION_CHANCE = 0.10;
 
 /**
  * One controller per bot, driven from Room.update() at the real 64Hz physics
@@ -28,6 +35,8 @@ export class BotController {
   tick(now) {
     const bot = this.bot;
     if (!bot.isAlive) return;
+    // Single-player spawn countdown ("get your footing") -- see Room._startCountdown.
+    if (this.room.countdownEndsAt && now < this.room.countdownEndsAt) return;
 
     if (now >= this.nextDecisionAt) {
       this.nextDecisionAt = now + DECISION_INTERVAL_MS;
@@ -177,6 +186,8 @@ export class BotController {
   // ── Action selection ─────────────────────────────────────────────────────
 
   _chooseAction(bot, target, dist, lookDir, state, now) {
+    if (Math.random() > ACTION_CHANCE) return;
+
     // Defensive Parry: occasionally raise it when a live threat is nearby and it's ready.
     const parrySpellId = bot.equippedSpells.find((id) => id === 'parry');
     if (parrySpellId && !bot.isOnCooldown('parry') && dist < 16 && Math.random() < 0.2) {

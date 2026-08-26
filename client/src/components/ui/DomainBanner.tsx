@@ -1,5 +1,6 @@
 import { useGameStore } from '../../stores/gameStore';
 import { useNetworkStore } from '../../stores/networkStore';
+import { BODY_FONT } from '../../styles/fonts';
 
 // Domains are whole-arena ultimates with real mechanical effects (see
 // Room._domainSpeedMultiplier / _applyDomainPull / tickProjectiles), but
@@ -47,7 +48,7 @@ export function DomainBanner() {
       gap: 6,
       pointerEvents: 'none',
       zIndex: 140,
-      fontFamily: "'Courier New', monospace",
+      fontFamily: BODY_FONT,
     }}>
       <div style={{
         background: 'rgba(4,4,10,0.82)',

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { BODY_FONT } from '../../styles/fonts';
 
 /**
  * CS2-style net-graph readout for the render loop itself: FPS, current frame
@@ -64,7 +65,7 @@ export function FrameStats() {
       position: 'fixed',
       top: 56,
       left: 12,
-      fontFamily: "'Courier New', monospace",
+      fontFamily: BODY_FONT,
       fontSize: 12,
       letterSpacing: 1,
       pointerEvents: 'none',

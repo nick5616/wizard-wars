@@ -31,6 +31,7 @@ import { useCardRecipeStore, recipeFor } from '../../stores/cardRecipeStore';
 import { generateBatch, generateRecipe, THEME_LIST, SCHOOL_THEME, type ThemeId } from '../../utils/cardRecipeGen';
 import { rarityForGrade, type CardRecipe } from '../../data/cardRecipe';
 import { seedFromString } from '../../utils/cardSeed';
+import { BODY_FONT } from '../../styles/fonts';
 
 const ACCENT = '#b98cff';
 
@@ -74,7 +75,7 @@ export function DesignLab({ ws, onClose }: Props) {
       style={{
         position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        zIndex: 600, fontFamily: "'Courier New', monospace",
+        zIndex: 600, fontFamily: BODY_FONT,
       }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
@@ -557,11 +558,11 @@ function btn(border: string, color: string) {
   return {
     background: 'none', border: `1px solid ${border}`, borderRadius: 3, color,
     fontSize: 10, padding: '4px 10px', cursor: 'pointer', letterSpacing: 1,
-    fontFamily: "'Courier New', monospace",
+    fontFamily: BODY_FONT,
   } as const;
 }
 
 const selectStyle = {
   background: '#0c0c16', border: '1px solid #333', borderRadius: 3, color: '#ddd',
-  fontSize: 11, padding: '5px 6px', fontFamily: "'Courier New', monospace",
+  fontSize: 11, padding: '5px 6px', fontFamily: BODY_FONT,
 } as const;

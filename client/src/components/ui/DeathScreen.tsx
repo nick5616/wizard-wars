@@ -6,6 +6,7 @@ import { getForkPair } from 'shared/skillTrees';
 import type { WebSocketClient } from '../../networking/WebSocketClient';
 import type { WizardClass } from '../../types/game.types';
 import { audioManager } from '../../audio/AudioManager';
+import { TITLE_FONT, BODY_FONT } from '../../styles/fonts';
 
 interface DeathScreenProps {
   ws: WebSocketClient;
@@ -84,11 +85,11 @@ export function DeathScreen({ ws }: DeathScreenProps) {
         gap: 14,
         background: 'rgba(0,0,0,0.75)',
         zIndex: 200,
-        fontFamily: "'Courier New', monospace",
+        fontFamily: BODY_FONT,
       }}
       onClick={matchActive ? undefined : () => ws.send(C2S.RESPAWN, {})}
     >
-      <div style={{ fontSize: 34, color: '#cc0000', letterSpacing: 6 }}>DEFEATED</div>
+      <div style={{ fontFamily: TITLE_FONT, fontSize: 40, fontWeight: 900, color: '#cc4444', letterSpacing: 6 }}>DEFEATED</div>
       <div style={{ fontSize: 14, color: '#999', letterSpacing: 2, textTransform: 'uppercase' }}>
         {rank.name} · Level {local.level}
       </div>

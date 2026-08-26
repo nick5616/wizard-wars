@@ -12,6 +12,7 @@ import { SpellCard } from './SpellCard';
 import { BattleScene } from './BattleScene';
 import { SkillTreeTab } from './SkillTree';
 import { C2S } from 'shared/events';
+import { TITLE_FONT, BODY_FONT } from '../../styles/fonts';
 
 const CLASS_COLORS: Record<WizardClass, string> = {
   fire: '#ff4500', ice: '#a0d8ff', dark: '#cc00ff', sword: '#c8c8c8', druid: '#5a9e3d', crystalmancer: '#8fd4ff',
@@ -200,7 +201,7 @@ export function PauseMenu({ ws, onClose, experimentLabAvailable, onOpenExperimen
         display: 'flex',
         flexDirection: 'column',
         zIndex: 500,
-        fontFamily: "'Courier New', monospace",
+        fontFamily: BODY_FONT,
       }}
     >
       {/* Header */}
@@ -213,7 +214,7 @@ export function PauseMenu({ ws, onClose, experimentLabAvailable, onOpenExperimen
         flexShrink: 0,
       }}>
         <div>
-          <div style={{ color: classColor, fontSize: 13, letterSpacing: 6, textTransform: 'uppercase', marginBottom: 3 }}>
+          <div style={{ fontFamily: TITLE_FONT, color: classColor, fontSize: 16, letterSpacing: 4, textTransform: 'uppercase', marginBottom: 3 }}>
             {wizardClass ?? 'Wizard'} — Paused
           </div>
           <div style={{ color: '#aaa', fontSize: 11, letterSpacing: 2 }}>
@@ -941,7 +942,7 @@ function SettingsTab({ ws, onClose, classColor, experimentLabAvailable, onOpenEx
           ].map(([k, v]) => (
             <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid #1a1a28' }}>
               <span style={{ color: '#aaa', fontSize: 11 }}>{k}</span>
-              <span style={{ color: '#ddd', fontSize: 11, fontFamily: 'monospace' }}>{v}</span>
+              <span style={{ color: '#ddd', fontSize: 11, fontFamily: BODY_FONT }}>{v}</span>
             </div>
           ))}
         </div>

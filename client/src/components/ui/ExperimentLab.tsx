@@ -14,6 +14,7 @@ import type { WebSocketClient } from '../../networking/WebSocketClient';
 import type { WizardClass, SimulationResult } from '../../types/game.types';
 import { UIButton } from './UIButton';
 import { TournamentBracket } from './TournamentBracket';
+import { BODY_FONT } from '../../styles/fonts';
 
 const CLASS_COLORS: Record<WizardClass, string> = {
   fire: '#ff4500', ice: '#a0d8ff', dark: '#cc00ff', sword: '#c8c8c8', druid: '#5a9e3d', crystalmancer: '#8fd4ff',
@@ -60,7 +61,7 @@ export function ExperimentLab({ ws, onClose, onReturnToLobby }: Props) {
       style={{
         position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        zIndex: 600, fontFamily: "'Courier New', monospace",
+        zIndex: 600, fontFamily: BODY_FONT,
       }}
       onClick={(e) => {
         if (e.target === e.currentTarget) {
@@ -444,5 +445,5 @@ function WinRateBar({ label, color, value }: { label: string; color: string; val
 
 const selectStyle = {
   background: '#0c0c16', border: '1px solid #333', borderRadius: 3, color: '#ddd',
-  fontSize: 11, padding: '5px 6px', fontFamily: "'Courier New', monospace",
+  fontSize: 11, padding: '5px 6px', fontFamily: BODY_FONT,
 } as const;

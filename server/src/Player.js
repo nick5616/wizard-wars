@@ -23,6 +23,7 @@ export class Player {
     this.skillPoints = 0;
     this.xp = 0;
     this.level = 1;
+    this.elo = 1000; // 1v1 duel reputation rating -- see Room._maybeEndMatch's duel branch
     this.divergedBranch = {}; // branchGroup -> chosen branch id
     this.unlockedNodes = new Set();
     // Glossary lore entries revealed by spending a skill point on knowledge
@@ -137,6 +138,7 @@ export class Player {
       mobilitySpell: this.mobilitySpell,
       defensiveSpell: this.defensiveSpell,
       kills: this.kills,
+      elo: this.elo,
     };
   }
 
@@ -155,6 +157,7 @@ export class Player {
     this.mobilitySpell = persisted.mobilitySpell ?? null;
     this.defensiveSpell = persisted.defensiveSpell ?? null;
     this.kills = persisted.kills ?? 0;
+    this.elo = persisted.elo ?? 1000;
   }
 
   selectClass(className) {
@@ -337,6 +340,7 @@ export class Player {
       unlockedNodes: [...this.unlockedNodes],
       revealedLore: [...this.revealedLore],
       kills: this.kills,
+      elo: this.elo,
       ping: this.ping,
       isBot: false,
       defensiveActive: this.defensiveActive && Date.now() < this.defensiveExpiry,

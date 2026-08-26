@@ -146,6 +146,7 @@ export class GameServer {
       username: player.username,
       class: player.class,
       level: player.level,
+      elo: player.elo,
     });
   }
 

@@ -17,6 +17,7 @@ import type { WebSocketClient } from '../../networking/WebSocketClient';
 import type { WizardClass, SimulationResult } from '../../types/game.types';
 import { UIButton } from './UIButton';
 import { SpellTypeIcon } from './SpellTypeIcon';
+import { BODY_FONT } from '../../styles/fonts';
 
 const CLASS_COLORS: Record<WizardClass, string> = {
   fire: '#ff4500', ice: '#a0d8ff', dark: '#cc00ff', sword: '#c8c8c8', druid: '#5a9e3d', crystalmancer: '#8fd4ff',
@@ -368,5 +369,5 @@ function LoadoutDetail({ participant, onBack }: { participant: Participant; onBa
 
 const selectStyle = {
   background: '#0c0c16', border: '1px solid #333', borderRadius: 3, color: '#ddd',
-  fontSize: 11, padding: '5px 6px', fontFamily: "'Courier New', monospace",
+  fontSize: 11, padding: '5px 6px', fontFamily: BODY_FONT,
 } as const;

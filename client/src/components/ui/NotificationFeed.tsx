@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useGameStore, NOTIFICATION_TTL_MS } from '../../stores/gameStore';
+import { BODY_FONT } from '../../styles/fonts';
 
 // Cheap, low-graphics-cost event feed (auto-unlocks, auto-equips, level/rank
 // ups, hat procs, denied casts, ...). Same age-fade/stacked-plain-div shape
@@ -41,7 +42,7 @@ export function NotificationFeed() {
             letterSpacing: 0.5,
             color: n.color,
             opacity,
-            fontFamily: "'Courier New', monospace",
+            fontFamily: BODY_FONT,
             whiteSpace: 'nowrap',
           }}>
             {n.text}

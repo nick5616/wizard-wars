@@ -13,6 +13,10 @@ interface NetworkState {
   // the arena instead of re-showing class select, without forcing that
   // decision the instant the app connects (see App.tsx's ROOM_JOINED handler).
   restoredClass: WizardClass | null;
+  // Duel reputation rating, sent on every S2C.ROOM_JOINED -- read by
+  // DuelSelect to show your current rating and each opponent's predicted
+  // odds before a 1v1 match starts.
+  elo: number;
   setConnected: (v: boolean) => void;
   setRtt: (ms: number) => void;
   setJitter: (ms: number) => void;
@@ -20,6 +24,7 @@ interface NetworkState {
   setRoomId: (id: string) => void;
   setRestoredUsername: (name: string | null) => void;
   setRestoredClass: (c: WizardClass | null) => void;
+  setElo: (v: number) => void;
 }
 
 export const useNetworkStore = create<NetworkState>((set) => ({
@@ -30,6 +35,7 @@ export const useNetworkStore = create<NetworkState>((set) => ({
   roomId: null,
   restoredUsername: null,
   restoredClass: null,
+  elo: 1000,
   setConnected: (v) => set({ connected: v }),
   setRtt: (ms) => set({ rtt: ms }),
   setJitter: (ms) => set({ jitter: ms }),
@@ -37,4 +43,5 @@ export const useNetworkStore = create<NetworkState>((set) => ({
   setRoomId: (id) => set({ roomId: id }),
   setRestoredUsername: (name) => set({ restoredUsername: name }),
   setRestoredClass: (c) => set({ restoredClass: c }),
+  setElo: (v) => set({ elo: v }),
 }));

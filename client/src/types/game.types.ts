@@ -81,6 +81,7 @@ export interface PlayerState {
   unlockedNodes: string[];
   revealedLore: string[];
   kills: number;
+  elo: number;
   ping: number;
   isBot: boolean;
   defensiveActive?: boolean;

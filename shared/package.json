@@ -12,6 +12,7 @@
     "./skillTrees": "./skillTrees.js",
     "./classFlavor": "./classFlavor.js",
     "./gameModes": "./gameModes.js",
+    "./duelOpponents": "./duelOpponents.js",
     "./leveling": "./leveling.js",
     "./mapLayout": "./mapLayout.js",
     "./movement": "./movement.js"

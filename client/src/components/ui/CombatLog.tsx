@@ -13,6 +13,7 @@
 
 import { useEffect, useState } from 'react';
 import { getSpell } from 'shared/spells';
+import { BODY_FONT } from '../../styles/fonts';
 import { S2C } from 'shared/events';
 import { useNetworkStore } from '../../stores/networkStore';
 import { IS_LOCALHOST } from '../../utils/isLocalhost';
@@ -81,7 +82,7 @@ export function CombatLogHUD({ ws }: { ws: WebSocketClient }) {
       padding: '6px 14px',
       pointerEvents: 'none',
       zIndex: 90,
-      fontFamily: "'Courier New', monospace",
+      fontFamily: BODY_FONT,
     }}>
       {entries.map((e) => (
         <div key={e.id} style={{ color: e.color, fontSize: 11, padding: '3px 0', borderBottom: '1px solid rgba(255,255,255,0.06)', lineHeight: 1.4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>

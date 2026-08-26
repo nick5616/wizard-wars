@@ -8,6 +8,7 @@ import { CLASS_SYMBOL, CLASS_LABEL, CLASS_FORK_GROUP, BRANCH_FLAVOR } from 'shar
 import { getTree, getForkPair } from 'shared/skillTrees';
 import { CARD_FRAME_CLIP, DEFAULT_FRAME_CLIP } from '../../data/cardFrames';
 import cardThemes from '../../data/spellCardThemes.json';
+import { TITLE_FONT, BODY_FONT } from '../../styles/fonts';
 
 interface ClassSelectProps {
   ws: WebSocketClient;
@@ -16,6 +17,9 @@ interface ClassSelectProps {
   // ModeSelect/App.tsx) -- when present, picking a class starts a private
   // bot match (C2S.START_MATCH) instead of joining the shared lobby.
   pendingMode?: string | null;
+  // Set when pendingMode is '1v1' -- the specific opponent chosen in
+  // DuelSelect (see shared/duelOpponents.js), included in the START_MATCH payload.
+  pendingOpponentId?: string | null;
 }
 
 interface SchoolTheme { frame: string; cornerGlyph: string; patternSalt: number; }
@@ -85,7 +89,7 @@ function specCardsFor(wizardClass: WizardClass): SpecCard[] {
   ];
 }
 
-export function ClassSelect({ ws, onSelected, pendingMode }: ClassSelectProps) {
+export function ClassSelect({ ws, onSelected, pendingMode, pendingOpponentId }: ClassSelectProps) {
   const [selected, setSelected] = useState<WizardClass>('fire');
   const [name, setName] = useState(() => useNetworkStore.getState().restoredUsername ?? '');
 
@@ -96,7 +100,8 @@ export function ClassSelect({ ws, onSelected, pendingMode }: ClassSelectProps) {
   function select(c: WizardClass) {
     const trimmed = name.trim().slice(0, 20);
     if (pendingMode) {
-      ws.send(C2S.START_MATCH, trimmed ? { mode: pendingMode, class: c, username: trimmed } : { mode: pendingMode, class: c });
+      const base = { mode: pendingMode, class: c, ...(pendingOpponentId ? { opponentId: pendingOpponentId } : {}) };
+      ws.send(C2S.START_MATCH, trimmed ? { ...base, username: trimmed } : base);
     } else {
       ws.send(C2S.SELECT_CLASS, trimmed ? { class: c, username: trimmed } : { class: c });
     }
@@ -118,9 +123,9 @@ export function ClassSelect({ ws, onSelected, pendingMode }: ClassSelectProps) {
       alignItems: 'center',
       justifyContent: 'center',
       zIndex: 300,
-      fontFamily: "'Courier New', monospace",
+      fontFamily: BODY_FONT,
     }}>
-      <div style={{ color: '#ccccdd', letterSpacing: 8, fontSize: 14, marginBottom: 20, textTransform: 'uppercase' }}>
+      <div style={{ fontFamily: TITLE_FONT, color: '#e8dcb8', letterSpacing: 4, fontSize: 26, marginBottom: 20, textTransform: 'uppercase' }}>
         Choose Your Class
       </div>
 
@@ -148,7 +153,7 @@ export function ClassSelect({ ws, onSelected, pendingMode }: ClassSelectProps) {
                 gap: 4,
                 transition: 'all 0.2s',
                 color: active ? c : '#999',
-                fontFamily: "'Courier New', monospace",
+                fontFamily: BODY_FONT,
                 opacity: comingSoon ? 0.4 : 1,
               }}
             >
@@ -218,7 +223,7 @@ export function ClassSelect({ ws, onSelected, pendingMode }: ClassSelectProps) {
           fontSize: 13,
           letterSpacing: 1,
           textAlign: 'center',
-          fontFamily: "'Courier New', monospace",
+          fontFamily: BODY_FONT,
           outline: 'none',
         }}
       />

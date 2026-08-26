@@ -1,5 +1,6 @@
 import { UIButton } from './UIButton';
 import { GAME_MODES, GAME_MODE_ORDER } from 'shared/gameModes';
+import { TITLE_FONT, BODY_FONT } from '../../styles/fonts';
 
 interface GameMode {
   id: string;
@@ -15,8 +16,6 @@ interface ModeSelectProps {
   onBack: () => void;
 }
 
-const TITLE_FONT = "'Cinzel Decorative', serif";
-const BODY_FONT = "'MedievalSharp', cursive";
 
 /** Single Player: pick a bot game mode before heading into class select. */
 export function ModeSelect({ onPick, onBack }: ModeSelectProps) {
@@ -43,14 +42,16 @@ export function ModeSelect({ onPick, onBack }: ModeSelectProps) {
         Choose Your Battle
       </div>
 
-      <div style={{ display: 'flex', gap: 20 }}>
+      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', justifyContent: 'center', maxWidth: 920 }}>
         {GAME_MODE_ORDER.map((id: string) => {
           const mode = MODES[id];
           const teamCount = mode.teamSizes.length;
           const allEqual = mode.teamSizes.every((n) => n === mode.teamSizes[0]);
-          const composition = allEqual
-            ? `${teamCount} team${teamCount > 1 ? 's' : ''} of ${mode.teamSizes[0]}`
-            : mode.teamSizes.join(' vs ');
+          const composition = id === 'duel1v1'
+            ? 'Choose your rival'
+            : allEqual
+              ? `${teamCount} team${teamCount > 1 ? 's' : ''} of ${mode.teamSizes[0]}`
+              : mode.teamSizes.join(' vs ');
 
           return (
             <UIButton

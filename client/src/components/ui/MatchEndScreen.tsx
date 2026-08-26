@@ -1,16 +1,15 @@
+import { useEffect } from 'react';
 import { useGameStore, type MatchResultPlayer } from '../../stores/gameStore';
 import { useNetworkStore } from '../../stores/networkStore';
 import { C2S } from 'shared/events';
 import { UIButton } from './UIButton';
 import type { WebSocketClient } from '../../networking/WebSocketClient';
 import type { WizardClass } from '../../types/game.types';
+import { TITLE_FONT, BODY_FONT } from '../../styles/fonts';
 
 interface MatchEndScreenProps {
   ws: WebSocketClient;
 }
-
-const TITLE_FONT = "'Cinzel Decorative', serif";
-const BODY_FONT = "'MedievalSharp', cursive";
 
 const CLASS_COLORS: Record<WizardClass, string> = {
   fire: '#ff4500', ice: '#a0d8ff', dark: '#cc00ff', sword: '#c8c8c8', druid: '#5a9e3d', crystalmancer: '#8fd4ff',
@@ -62,19 +61,38 @@ export function MatchEndScreen({ ws }: MatchEndScreenProps) {
     useGameStore.getState().setPhase('main_menu');
   }
 
+  // The match was just played with the mouse pointer-locked to the canvas --
+  // release it so the cursor (and the Return to Menu button) is actually
+  // visible, and let any key or a click anywhere on the screen continue,
+  // same as DeathScreen, rather than requiring the un-discoverable "press
+  // Escape first" step to even see a clickable button.
+  useEffect(() => {
+    if (document.pointerLockElement) document.exitPointerLock();
+
+    function onKeyDown() {
+      returnToMenu();
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
-    <div style={{
-      position: 'fixed',
-      inset: 0,
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      background: 'rgba(0,0,0,0.88)',
-      zIndex: 400,
-      fontFamily: BODY_FONT,
-      overflowY: 'auto',
-      padding: '40px 0',
-    }}>
+    <div
+      onClick={returnToMenu}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: 'rgba(0,0,0,0.88)',
+        zIndex: 400,
+        fontFamily: BODY_FONT,
+        overflowY: 'auto',
+        padding: '40px 0',
+      }}
+    >
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 28, width: 'min(640px, 92vw)' }}>
         <div style={{
           fontFamily: TITLE_FONT,
@@ -86,6 +104,23 @@ export function MatchEndScreen({ ws }: MatchEndScreenProps) {
         }}>
           {headline}
         </div>
+
+        {/* ELO stake result -- only present for a 1v1 duel, see Room._maybeEndMatch */}
+        {matchResult?.elo && (
+          <div style={{ textAlign: 'center' }}>
+            <div style={{
+              fontFamily: TITLE_FONT,
+              fontSize: 26,
+              fontWeight: 700,
+              color: matchResult.elo.eloDelta >= 0 ? '#66ddaa' : '#cc6666',
+            }}>
+              {matchResult.elo.eloDelta >= 0 ? '+' : ''}{matchResult.elo.eloDelta} Reputation
+            </div>
+            <div style={{ fontSize: 11, letterSpacing: 1, textTransform: 'uppercase', color: '#9a8f6a', marginTop: 2 }}>
+              {matchResult.elo.eloBefore} → {matchResult.elo.eloAfter} (rival rated {matchResult.elo.opponentElo})
+            </div>
+          </div>
+        )}
 
         {/* Podium: top 3 teams, tallest stand in the middle */}
         {podiumTeams.length > 0 && (
@@ -189,7 +224,7 @@ export function MatchEndScreen({ ws }: MatchEndScreenProps) {
         </div>
 
         <UIButton
-          onClick={returnToMenu}
+          onClick={(e) => { e.stopPropagation(); returnToMenu(); }}
           style={{
             marginTop: 4,
             padding: '12px 28px',

@@ -7,6 +7,7 @@ import { getNode, canUnlockNode } from 'shared/skillTrees';
 import { CLASSES } from 'shared/constants';
 import { MAX_SPELL_SLOTS, ALL_SPELLS } from 'shared/spells';
 import { GAME_MODES } from 'shared/gameModes';
+import { getDuelOpponent } from 'shared/duelOpponents';
 
 // Design Lab writes here. Fixed path, never derived from the message — the
 // client only ever sends the contents, never a destination.
@@ -106,12 +107,16 @@ export class WebSocketHandler {
 
   /**
    * Landing screen "Single Player": spins up a private match room (never
-   * shared with other humans), assigns the picked mode's team/bot roster
-   * via Room.setupMatch, and drops the player straight into it.
+   * shared with other humans) and drops the player straight into it. The
+   * '1v1' mode picks a specific named opponent (see shared/duelOpponents.js
+   * and Room.setupDuel) instead of a random bot roster (Room.setupMatch).
    */
   _handleStartMatch(player, msg) {
     const mode = GAME_MODES[msg?.mode];
     if (!mode || !CLASSES.includes(msg?.class)) return;
+
+    const duelOpponent = mode.id === 'duel1v1' ? getDuelOpponent(msg?.opponentId) : null;
+    if (mode.id === 'duel1v1' && !duelOpponent) return;
 
     this._leaveCurrentRoom(player);
     const roomId = `match-${uuid()}`;
@@ -122,7 +127,12 @@ export class WebSocketHandler {
     }
     room.addPlayer(player);
     player.selectClass(msg.class);
-    room.setupMatch(mode, player);
+
+    if (duelOpponent) {
+      room.setupDuel(duelOpponent, player);
+    } else {
+      room.setupMatch(mode, player);
+    }
   }
 
   /** Returns to "no room" (the main menu) without joining the lobby -- see C2S.LEAVE_ROOM. */

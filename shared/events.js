@@ -54,6 +54,7 @@ export const S2C = {
   SKILL_AUTO_UNLOCKED: 's2c:skill_auto_unlocked',
   SKILL_VOTE_PROMPT:   's2c:skill_vote_prompt',
   MATCH_END:        's2c:match_end', // single-player match reached its last-team-standing win condition
+  MATCH_COUNTDOWN:  's2c:match_countdown', // single-player match: grace period before bots start acting, see Room._startCountdown
   ERROR:            's2c:error',
   // Experiment Lab
   SIMULATION_PROGRESS: 's2c:simulation_progress',

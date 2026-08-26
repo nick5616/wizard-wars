@@ -94,7 +94,7 @@ interface GameState {
   local: LocalPlayerState;
 
   // UI state
-  phase: 'connecting' | 'main_menu' | 'mode_select' | 'class_select' | 'playing' | 'dead' | 'match_end' | 'skill_tree';
+  phase: 'connecting' | 'main_menu' | 'mode_select' | 'duel_select' | 'class_select' | 'playing' | 'dead' | 'match_end' | 'skill_tree';
   killFeed: KillFeedEntry[];
   notifications: NotificationEntry[];
   voteState: VoteState | null;
@@ -111,11 +111,25 @@ interface GameState {
     // teams down to the first team wiped) -- see Room._maybeEndMatch.
     standings: number[];
     players: MatchResultPlayer[];
+    // Populated only for a 1v1 duel (see Room._maybeEndMatch's duel branch / shared/duelOpponents.js).
+    elo: { eloBefore: number; eloAfter: number; eloDelta: number; opponentElo: number } | null;
   } | null;
   setMatchResult: (v: GameState['matchResult']) => void;
 
+  // Grace period after spawning into a single-player match, before bots
+  // start acting (see Room._startCountdown / S2C.MATCH_COUNTDOWN) -- ms
+  // epoch, compared against Date.now() same as DomainBanner's timers.
+  matchCountdownEndsAt: number | null;
+  setMatchCountdownEndsAt: (v: number | null) => void;
+
   // Set by GAME_TICK reconciliation, consumed and cleared by CameraController
   serverCorrectedPos: Vec3 | null;
+
+  // Set by S2C.PLAYER_RESPAWNED for the local player (server picks a facing
+  // on match spawn -- see Room.setupMatch/setupDuel's yawTowards -- rather
+  // than leaving the camera pointed wherever it last happened to look),
+  // consumed and cleared by CameraController the same way as serverCorrectedPos.
+  spawnYaw: number | null;
 
   // Floating damage numbers
   damageNumbers: DamageNumber[];
@@ -208,10 +222,12 @@ export const useGameStore = create<GameState>((set, get) => ({
   voteState: null,
   lastDeath: null,
   serverCorrectedPos: null,
+  spawnYaw: null,
   damageNumbers: [],
   chargingSpell: null,
   matchActive: false,
   matchResult: null,
+  matchCountdownEndsAt: null,
   menuOpen: false,
   debugMode: false,
   birdsEyeView: false,
@@ -338,6 +354,7 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   setMatchActive: (v) => set({ matchActive: v }),
   setMatchResult: (v) => set({ matchResult: v }),
+  setMatchCountdownEndsAt: (v) => set({ matchCountdownEndsAt: v }),
   setMenuOpen: (v) => set({ menuOpen: v }),
   setDebugMode: (v) => set({ debugMode: v }),
   setBirdsEyeView: (v) => set({ birdsEyeView: v }),

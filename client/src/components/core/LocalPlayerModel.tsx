@@ -18,6 +18,7 @@ import { ArmAndWand } from './ArmAndWand';
 import { SwordBuffShards } from './SwordBuffShards';
 import { useCastAnimation } from '../../hooks/useCastAnimation';
 import { getSpell, DEFENSIVE_SPELL } from 'shared/spells';
+import { hatColorFor } from '../../utils/teamColor';
 
 const HAT_CONE_RADIUS = 0.28;
 const HAT_CONE_HEIGHT = 0.5;
@@ -44,6 +45,11 @@ export function LocalPlayerModel() {
   const local = useGameStore.getState().local;
   const color = CLASS_COLORS[local.class ?? 'default'] ?? CLASS_COLORS.default;
   const hatScale = hatScaleForLevel(local.level ?? 1);
+
+  // Team color on the hat only -- the body stays class-colored so an
+  // opponent's class is still readable at a glance. See utils/teamColor.ts.
+  const players = useGameStore((s) => s.players);
+  const hatColor = hatColorFor(local.team, color, players);
 
   // Unlike the rest of this component, the wand gem needs to be reactive --
   // it only changes on the rare occasions the active slot/loadout changes,
@@ -80,7 +86,7 @@ export function LocalPlayerModel() {
       <group position={[0, HAT_BASE_LOCAL_Y, 0]} scale={[hatScale, hatScale, hatScale]}>
         <mesh position={[0, HAT_CONE_HEIGHT / 2, 0]} castShadow>
           <coneGeometry args={[HAT_CONE_RADIUS, HAT_CONE_HEIGHT, 12]} />
-          <meshStandardMaterial color={color} roughness={0.45} metalness={0.2} />
+          <meshStandardMaterial color={hatColor} roughness={0.45} metalness={0.2} />
         </mesh>
       </group>
 

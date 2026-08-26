@@ -3,6 +3,7 @@ import { useFrame } from '@react-three/fiber';
 import { Html } from '@react-three/drei';
 import * as THREE from 'three';
 import { useGameStore, type DamageNumber } from '../../stores/gameStore';
+import { BODY_FONT } from '../../styles/fonts';
 
 const DURATION = 1.6; // seconds
 
@@ -69,7 +70,7 @@ function DamageNumberItem({ entry }: { entry: DamageNumber }) {
             left: 0,
             transform: 'translate(-50%, -50%)',
             transformOrigin: 'center center',
-            fontFamily: "'Courier New', monospace",
+            fontFamily: BODY_FONT,
             fontWeight: 900,
             fontSize: entry.fontSize,
             color: entry.color,

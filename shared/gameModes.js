@@ -5,6 +5,12 @@
  * a bot -- see Room.setupMatch.
  */
 export const GAME_MODES = {
+  duel1v1: {
+    id: 'duel1v1',
+    label: '1v1',
+    description: 'Pick a rival and stake your reputation on the outcome.',
+    teamSizes: [1, 1],
+  },
   ffa5: {
     id: 'ffa5',
     label: '1v1v1v1v1',
@@ -31,4 +37,4 @@ export const GAME_MODES = {
   },
 };
 
-export const GAME_MODE_ORDER = ['ffa5', 'teams2v2', 'teams5v5', 'sixteams2'];
+export const GAME_MODE_ORDER = ['duel1v1', 'ffa5', 'teams2v2', 'teams5v5', 'sixteams2'];

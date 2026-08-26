@@ -2,14 +2,12 @@ import { useState } from 'react';
 import { UIButton } from './UIButton';
 import { MenuBattleBackdrop } from './MenuBattleBackdrop';
 import { PipeSmoke } from './PipeSmoke';
+import { TITLE_FONT, BODY_FONT } from '../../styles/fonts';
 
 interface MainMenuProps {
   onSinglePlayer: () => void;
   onMultiplayer: () => void;
 }
-
-const TITLE_FONT = "'Cinzel Decorative', serif";
-const BODY_FONT = "'MedievalSharp', cursive";
 
 /**
  * Landing screen. Two wizards trade spells behind the title (a fantasy

@@ -14,8 +14,10 @@ import { Scene } from './components/core/Scene';
 import { HUD } from './components/ui/HUD';
 import { MainMenu } from './components/ui/MainMenu';
 import { ModeSelect } from './components/ui/ModeSelect';
+import { DuelSelect } from './components/ui/DuelSelect';
 import { ClassSelect } from './components/ui/ClassSelect';
 import { MatchEndScreen } from './components/ui/MatchEndScreen';
+import { MatchCountdown } from './components/ui/MatchCountdown';
 import { PauseMenu } from './components/ui/PauseMenu';
 import { ExperimentLab } from './components/ui/ExperimentLab';
 import { DesignLab } from './components/ui/DesignLab';
@@ -74,8 +76,9 @@ export default function App() {
   const [pauseMenuTab, setPauseMenuTab] = useState<'spells' | 'tree' | 'glossary' | 'settings'>('spells');
   const [showExperimentLab, setShowExperimentLab] = useState(false);
   const [showDesignLab, setShowDesignLab] = useState(false);
-  // Set by ModeSelect, consumed by ClassSelect -- see onClassSelected below.
+  // Set by ModeSelect/DuelSelect, consumed by ClassSelect -- see onClassSelected below.
   const [pendingMode, setPendingMode] = useState<string | null>(null);
+  const [pendingOpponentId, setPendingOpponentId] = useState<string | null>(null);
 
   // Must be declared before the useEffect that depends on it
   const phase = useGameStore((s) => s.phase);
@@ -89,15 +92,15 @@ export default function App() {
   // (voteState.blocking === false) is a light, non-blocking corner nudge and
   // must NOT freeze the camera/movement.
   useEffect(() => {
-    const menuPhase = phase === 'class_select' || phase === 'connecting' || phase === 'main_menu' || phase === 'mode_select' || phase === 'match_end';
+    const menuPhase = phase === 'class_select' || phase === 'connecting' || phase === 'main_menu' || phase === 'mode_select' || phase === 'duel_select' || phase === 'match_end';
     const blocking = showPauseMenu || showExperimentLab || showDesignLab || menuPhase || voteState?.blocking === true;
     useGameStore.getState().setMenuOpen(blocking);
   }, [showPauseMenu, showExperimentLab, showDesignLab, phase, voteState]);
   const {
     setPhase, applyTick, setLocalClass, addKillFeedEntry, setLocalAlive, setLocalPosition, spawnDamageNumber,
-    pushNotification, setVoteState, setLastDeath, setMatchActive, setMatchResult,
+    pushNotification, setVoteState, setLastDeath, setMatchActive, setMatchResult, setMatchCountdownEndsAt,
   } = useGameStore.getState();
-  const { setLocalPlayerId, setRoomId, setRestoredUsername, setRestoredClass } = useNetworkStore.getState();
+  const { setLocalPlayerId, setRoomId, setRestoredUsername, setRestoredClass, setElo } = useNetworkStore.getState();
 
   useEffect(() => {
     const wsClient = ws.current;
@@ -119,15 +122,23 @@ export default function App() {
       // Multiplayer can still drop straight back into the arena.
       if (restoredClass) setRestoredClass(restoredClass);
       if (restoredUsername) setRestoredUsername(restoredUsername);
+      if (typeof msg.elo === 'number') setElo(msg.elo);
       setPhase('main_menu');
+    });
+
+    const offMatchCountdown = wsClient.on(S2C.MATCH_COUNTDOWN, (msg) => {
+      setMatchCountdownEndsAt(msg.endsAt as number);
     });
 
     const offMatchEnd = wsClient.on(S2C.MATCH_END, (msg) => {
       setMatchActive(false);
+      const elo = msg.elo as { eloBefore: number; eloAfter: number; eloDelta: number; opponentElo: number } | null;
+      if (elo) setElo(elo.eloAfter);
       setMatchResult({
         winningTeam: (msg.winningTeam as number | null) ?? null,
         standings: (msg.standings as number[] | undefined) ?? [],
         players: (msg.players as MatchResultPlayer[] | undefined) ?? [],
+        elo: elo ?? null,
       });
       setPhase('match_end');
     });
@@ -274,6 +285,10 @@ export default function App() {
       if (msg.playerId === localId) {
         // Sync camera to actual spawn position before prediction takes over
         if (msg.position) setLocalPosition(msg.position as { x: number; y: number; z: number });
+        // Match spawns pick a facing (toward the opponent/arena center --
+        // see Room.setupMatch/setupDuel) instead of leaving the camera
+        // pointed wherever it last happened to look; consumed by CameraController.
+        if (typeof msg.yaw === 'number') useGameStore.setState({ spawnYaw: msg.yaw });
         setLocalAlive(true);
         setPhase('playing');
         audioManager.playSound('respawn_materialize');
@@ -329,6 +344,7 @@ export default function App() {
 
     return () => {
       offJoined();
+      offMatchCountdown();
       offMatchEnd();
       offRoomState();
       offTick();
@@ -353,9 +369,10 @@ export default function App() {
     setPhase('playing');
     if (pendingMode) {
       // ClassSelect already sent C2S.START_MATCH instead of SELECT_CLASS
-      // when pendingMode is set -- see its `pendingMode` prop.
+      // when pendingMode is set -- see its `pendingMode`/`pendingOpponentId` props.
       useGameStore.getState().setMatchActive(true);
       setPendingMode(null);
+      setPendingOpponentId(null);
     }
   }
 
@@ -375,11 +392,24 @@ export default function App() {
   }
 
   function onSinglePlayer() {
+    setPendingMode(null);
+    setPendingOpponentId(null);
     setPhase('mode_select');
   }
 
   function onPickMode(modeId: string) {
+    if (modeId === 'duel1v1') {
+      // 1v1 needs an opponent picked first -- see DuelSelect.
+      setPendingMode(modeId);
+      setPhase('duel_select');
+      return;
+    }
     setPendingMode(modeId);
+    setPhase('class_select');
+  }
+
+  function onPickOpponent(opponentId: string) {
+    setPendingOpponentId(opponentId);
     setPhase('class_select');
   }
 
@@ -395,6 +425,7 @@ export default function App() {
       {/* 2D overlay UI */}
       <HUD ws={ws.current} />
       <NotificationFeed />
+      <MatchCountdown />
       {phase === 'playing' && <SkillVotePrompt ws={ws.current} />}
       {phase === 'dead' && <DeathScreen ws={ws.current} />}
       {phase === 'match_end' && <MatchEndScreen ws={ws.current} />}
@@ -409,9 +440,14 @@ export default function App() {
         <ModeSelect onPick={onPickMode} onBack={() => setPhase('main_menu')} />
       )}
 
+      {/* Single Player 1v1: opponent picker, staking ELO on the outcome */}
+      {phase === 'duel_select' && (
+        <DuelSelect onPick={onPickOpponent} onBack={() => { setPendingMode(null); setPhase('mode_select'); }} />
+      )}
+
       {/* Class selection (blocks scene interaction until chosen) */}
       {phase === 'class_select' && (
-        <ClassSelect ws={ws.current} onSelected={onClassSelected} pendingMode={pendingMode} />
+        <ClassSelect ws={ws.current} onSelected={onClassSelected} pendingMode={pendingMode} pendingOpponentId={pendingOpponentId} />
       )}
 
       {/* Connecting overlay */}

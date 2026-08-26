@@ -647,8 +647,10 @@ export function nameStyle(recipe: CardRecipe, label: string, availWidth: number,
   const base = recipe.nameCase === 'normal' ? 12 : 10.5;
   const tracking = recipe.nameCase === 'wide' ? 1.6 : recipe.nameCase === 'upper' ? 0.6 : 0;
 
-  // Courier is monospace at ~0.6em per glyph; uppercase and tracking widen it.
-  const perChar = 0.6 + tracking / base + (recipe.nameCase === 'upper' ? 0.02 : 0);
+  // MedievalSharp (see styles/fonts.ts) runs a bit wider per glyph than a
+  // monospace terminal font -- ~0.64em average is a conservative estimate
+  // that errs toward shrinking rather than clipping; uppercase and tracking widen it further.
+  const perChar = 0.64 + tracking / base + (recipe.nameCase === 'upper' ? 0.02 : 0);
 
   // Two independent limits: the longest single word must not overflow a
   // line (words can't break), and the whole string must fit the block.

@@ -14,7 +14,7 @@ import {
   GROUND_ACCEL, AIR_ACCEL, GROUND_FRICTION, STOP_SPEED, AIR_CAP_SPEED, MAX_AIR_JUMPS,
   CLASSES,
 } from 'shared/constants';
-import { getSpell } from 'shared/spells';
+import { getSpell, MAX_SPELL_SLOTS, equippableSpellsForClass } from 'shared/spells';
 import { XP_PER_KILL, levelFromXp, rankForLevel, hatBuffTierForLevel, HAT_BUFF_DAMAGE_MULT } from 'shared/leveling';
 import { terrainHeightAt, resolveTerrainCollision, resolveCircleObstacles } from 'shared/mapLayout';
 import { applyGroundFriction, applyGroundAccel, applyAirAccel, normalizeWishDir } from 'shared/movement';
@@ -32,6 +32,14 @@ const SPAWN_POSITIONS = [
   { x: -14, y: PLAYER_HEIGHT, z: -14 },
 ];
 
+const MATCH_COUNTDOWN_MS = 3000; // grace period after spawning into a single-player match before bots start acting
+const DUEL_ELO_K = 32; // standard chess-style K-factor -- how many rating points a single duel can move
+
+/** Yaw (radians) that faces `to` from `from` -- matches the forward vector Room.processInput derives from yaw (-sin(yaw), -cos(yaw)). */
+function yawTowards(from, to) {
+  return Math.atan2(-(to.x - from.x), -(to.z - from.z));
+}
+
 export class Room {
   constructor({ id, server, respawnEnabled = true, matchMode = false }) {
     this.id = id;
@@ -40,6 +48,9 @@ export class Room {
     this.matchMode = matchMode; // true for a private single-player-vs-bots match room -- gates team win-condition checks
     this.matchEnded = false;
     this.teamEliminationOrder = []; // team ids, in the order every one of their members died -- see _maybeEndMatch
+    this.countdownEndsAt = null; // ms epoch; bots stay passive until this passes, see BotController.tick and _startCountdown
+    this.isDuel = false; // true for a 1v1 Single Player duel (see setupDuel) -- gates the ELO stake calculation in _maybeEndMatch
+    this.duelOpponentElo = null;
     this.playerIds = new Set();
     this.projectiles = new Map();  // projectileId → projectile state
     this.barriers = new Map();     // barrierId → barrier state
@@ -104,15 +115,23 @@ export class Room {
     this.server.broadcast(this.id, { type: S2C.PLAYER_LEFT, playerId });
   }
 
-  /** `position` overrides the round-robin SPAWN_POSITIONS pick -- used by setupMatch() to cluster teammates. */
-  spawnPlayer(player, position = null) {
+  /**
+   * `position` overrides the round-robin SPAWN_POSITIONS pick -- used by
+   * setupMatch()/setupDuel() to cluster teammates. `yaw` optionally sets
+   * facing on spawn (same callers, so a match doesn't start with the
+   * player staring away from the fight) -- omitted, yaw is left as-is,
+   * matching the original lobby-respawn behavior.
+   */
+  spawnPlayer(player, position = null, yaw = null) {
     const pos = position ?? SPAWN_POSITIONS[this.spawnIndex % SPAWN_POSITIONS.length];
     if (!position) this.spawnIndex++;
     player.spawn({ ...pos });
+    if (yaw != null) player.yaw = yaw;
     this.server.broadcast(this.id, {
       type: S2C.PLAYER_RESPAWNED,
       playerId: player.id,
       position: player.position,
+      yaw: player.yaw,
     });
   }
 
@@ -134,19 +153,54 @@ export class Room {
         const jitterX = slot === 0 ? 0 : (Math.random() - 0.5) * 6;
         const jitterZ = slot === 0 ? 0 : (Math.random() - 0.5) * 6;
         const position = { x: anchor.x + jitterX, y: anchor.y, z: anchor.z + jitterZ };
+        // Face into the arena (toward center) rather than whatever direction
+        // they happened to be looking before the match started.
+        const yaw = yawTowards(position, { x: 0, z: 0 });
         if (team === 0 && slot === 0) {
           humanPlayer.team = 0;
-          this.spawnPlayer(humanPlayer, position);
+          this.spawnPlayer(humanPlayer, position, yaw);
         } else {
           const wizardClass = CLASSES[Math.floor(Math.random() * CLASSES.length)];
-          this.spawnBot({ class: wizardClass, behavior: 'aggressive', position, team });
+          this.spawnBot({ class: wizardClass, behavior: 'aggressive', position, team, yaw });
         }
       }
     });
+    this._startCountdown();
+  }
+
+  /**
+   * Sets up a private 1v1 duel room: `humanPlayer` on team 0, a single bot
+   * built from `preset` (see shared/duelOpponents.js) on team 1, loaded out
+   * with `preset.spellCount` of its class's equippable spells (lowest tier
+   * first). `preset.elo` is stashed for the reputation-stake calculation
+   * once the duel ends -- see _maybeEndMatch.
+   */
+  setupDuel(preset, humanPlayer) {
+    this.isDuel = true;
+    this.duelOpponentElo = preset.elo;
+
+    const humanPos = SPAWN_POSITIONS[0];
+    const botPos = SPAWN_POSITIONS[1];
+    // Face each other exactly, not just "into the arena" -- with only two
+    // combatants there's no ambiguity about which direction actually matters.
+    humanPlayer.team = 0;
+    this.spawnPlayer(humanPlayer, humanPos, yawTowards(humanPos, botPos));
+
+    const loadout = equippableSpellsForClass(preset.class).slice(0, preset.spellCount).map((s) => s.id);
+    while (loadout.length < MAX_SPELL_SLOTS) loadout.push(null);
+    this.spawnBot({ class: preset.class, behavior: preset.behavior, position: botPos, team: 1, loadout, yaw: yawTowards(botPos, humanPos) });
+
+    this._startCountdown();
+  }
+
+  /** Grace period after spawning into a single-player match before bots start acting -- see BotController.tick. */
+  _startCountdown() {
+    this.countdownEndsAt = Date.now() + MATCH_COUNTDOWN_MS;
+    this.server.broadcast(this.id, { type: S2C.MATCH_COUNTDOWN, endsAt: this.countdownEndsAt });
   }
 
   /** Creates and spawns a bot into this room. Returns the Bot instance. */
-  spawnBot({ class: wizardClass, behavior = 'aggressive', position = null, loadout = null, autoEquipOnLevel = true, team = null }) {
+  spawnBot({ class: wizardClass, behavior = 'aggressive', position = null, yaw = null, loadout = null, autoEquipOnLevel = true, team = null }) {
     const id = `bot-${uuid()}`;
     // "DruidBot_4324" -- names the class so a killfeed/scoreboard entry reads
     // as an actual opponent instead of an anonymous id fragment.
@@ -161,6 +215,7 @@ export class Room {
 
     if (position) {
       bot.spawn(position);
+      if (yaw != null) bot.yaw = yaw;
     } else {
       this.spawnPlayer(bot);
     }
@@ -813,7 +868,26 @@ export class Room {
           isAlive: p.isAlive,
         }));
 
-      this.server.broadcast(this.id, { type: S2C.MATCH_END, winningTeam, standings, players });
+      // Duel reputation stake: standard chess-style expected-score formula
+      // against the opponent's fixed preset rating (see
+      // shared/duelOpponents.js) -- beating a higher-rated opponent gains
+      // more than beating a lower-rated one, and the reverse on a loss.
+      let elo = null;
+      if (this.isDuel) {
+        const human = players.find((p) => !p.isBot);
+        const humanPlayer = human ? this.server.players.get(human.id) : null;
+        if (humanPlayer) {
+          const eloBefore = humanPlayer.elo;
+          const expected = 1 / (1 + Math.pow(10, (this.duelOpponentElo - eloBefore) / 400));
+          const score = winningTeam === null ? 0.5 : (winningTeam === humanPlayer.team ? 1 : 0);
+          const delta = Math.round(DUEL_ELO_K * (score - expected));
+          humanPlayer.elo = Math.max(100, eloBefore + delta);
+          this.server.persistPlayer(humanPlayer);
+          elo = { eloBefore, eloAfter: humanPlayer.elo, eloDelta: humanPlayer.elo - eloBefore, opponentElo: this.duelOpponentElo };
+        }
+      }
+
+      this.server.broadcast(this.id, { type: S2C.MATCH_END, winningTeam, standings, players, elo });
     }
   }
 

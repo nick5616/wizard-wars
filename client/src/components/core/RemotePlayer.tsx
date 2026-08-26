@@ -10,6 +10,8 @@ import { ArmAndWand } from './ArmAndWand';
 import { SwordBuffShards } from './SwordBuffShards';
 import { useCastAnimation } from '../../hooks/useCastAnimation';
 import { getSpell, DEFENSIVE_SPELL } from 'shared/spells';
+import { useGameStore } from '../../stores/gameStore';
+import { hatColorFor } from '../../utils/teamColor';
 
 // Must mirror the private HAT_CONE_* / HAT_BASE_LOCAL_Y constants in
 // shared/leveling.js so the rendered hat lines up with where the server
@@ -51,6 +53,11 @@ export function RemotePlayer({ playerId, interpolation, serverNow, initialState 
   const baseColor = CLASS_COLORS[initialState.class ?? 'default'] ?? CLASS_COLORS.default;
   const color = initialState.isBot ? darken(baseColor, 0.55) : baseColor;
   const hatScale = hatScaleForLevel(initialState.level ?? 1);
+
+  // Team color on the hat only (body stays class-colored) -- see utils/teamColor.ts.
+  const players = useGameStore((s) => s.players);
+  const baseHatColor = hatColorFor(initialState.team, baseColor, players);
+  const hatColor = initialState.isBot ? darken(baseHatColor, 0.55) : baseHatColor;
   const castAnimRef = useCastAnimation(playerId);
 
   // Wand-tip gem tracks whatever spell is currently selected -- initialState
@@ -107,7 +114,7 @@ export function RemotePlayer({ playerId, interpolation, serverNow, initialState 
       <group position={[0, HAT_BASE_LOCAL_Y, 0]} scale={[hatScale, hatScale, hatScale]}>
         <mesh position={[0, HAT_CONE_HEIGHT / 2, 0]} castShadow>
           <coneGeometry args={[HAT_CONE_RADIUS, HAT_CONE_HEIGHT, 12]} />
-          <meshStandardMaterial color={color} roughness={0.45} metalness={0.2} />
+          <meshStandardMaterial color={hatColor} roughness={0.45} metalness={0.2} />
         </mesh>
       </group>
 

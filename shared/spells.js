@@ -677,6 +677,20 @@ export const MAX_SPELL_SLOTS = 10;
 /** True for spells that belong in a regular equip slot (excludes passives and the Shift mobility / Q defensive spells). */
 export const isEquippableSpell = (spell) => spell.type !== 'passive' && spell.type !== 'mobility' && spell.type !== 'defensive';
 
+const ALWAYS_AVAILABLE_IDS = new Set([...Object.values(BASIC_ATTACK), ...Object.values(MELEE_ATTACK)]);
+
+/**
+ * A class's equippable spells (excludes passives, mobility/defensive, and
+ * the always-on RMB/F basic-attack and melee -- those fire regardless of
+ * what's in a slot, so putting them in one is a silently-broken no-op, see
+ * ExperimentLab.tsx's identical filter), sorted by tier ascending.
+ */
+export function equippableSpellsForClass(wizardClass) {
+  return Object.values(ALL_SPELLS)
+    .filter((s) => s.class === wizardClass && isEquippableSpell(s) && !ALWAYS_AVAILABLE_IDS.has(s.id))
+    .sort((a, b) => a.tier - b.tier);
+}
+
 // Default starting spells per class (slot index → spell id). Padded to
 // MAX_SPELL_SLOTS -- remaining slots open up as the player unlocks more spells.
 export const DEFAULT_EQUIPPED = {

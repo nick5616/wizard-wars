@@ -1,4 +1,5 @@
 import { useNetworkStore } from '../../stores/networkStore';
+import { BODY_FONT } from '../../styles/fonts';
 
 /**
  * CS2-style net-graph corner readout: ping (RTT) and jitter (GAME_TICK
@@ -22,7 +23,7 @@ export function NetworkStats() {
       position: 'fixed',
       top: 34,
       left: 12,
-      fontFamily: "'Courier New', monospace",
+      fontFamily: BODY_FONT,
       fontSize: 12,
       letterSpacing: 1,
       pointerEvents: 'none',

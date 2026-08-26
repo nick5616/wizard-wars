@@ -6,13 +6,19 @@
     <title>Wizard Combat</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <!-- Landing/mode-select/match-end screens only (see MainMenu.tsx etc) --
-         the rest of the UI stays on Courier New, set per-overlay same as always. -->
+    <!-- Whimsical fantasy fonts, used app-wide -- see client/src/styles/fonts.ts -->
     <link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=MedievalSharp&display=swap" rel="stylesheet" />
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body, #root { width: 100%; height: 100%; overflow: hidden; background: #000; }
-      body { font-family: 'Courier New', monospace; color: #fff; }
+      body { font-family: 'MedievalSharp', cursive; color: #fff; }
+      /* Form controls don't inherit font-family by default in most browsers
+         -- without this, every <button>/<select> in the app silently falls
+         back to the OS UI font regardless of the fontFamily set on its
+         parent (or even a fontFamily style set on the element itself would
+         still be fine, but the vast majority of buttons here rely on
+         inheriting from their overlay's root div). */
+      button, input, select, textarea { font-family: inherit; }
     </style>
   </head>
   <body>
