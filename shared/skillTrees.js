@@ -134,6 +134,7 @@ export const SKILL_TREES = {
     { id: 'tremor_sense',    label: 'Tremor Sense',      type: 'passive', tier: 2,  x: 0.75, prereqs: ['crystal_shard'],           description: 'Resonance through the crystal lattice reveals footsteps through nearby walls.' },
     { id: 'rune_shard',      label: 'Shard Rune',        type: 'spell',   tier: 2,  x: 0.45, prereqs: ['crystal_shard'],           description: 'Place a rune. Detonates on the first enemy to step in it.' },
     { id: 'geode_bomb',      label: 'Geode Bomb',        type: 'spell',   tier: 2.5,x: 0.9,  prereqs: ['crystal_shard'],           description: 'Lobbed crystal. Falls fast and shatters into shrapnel.' },
+    { id: 'gem_plop',        label: 'Gem Plop',          type: 'spell',   tier: 2.5,x: 0.6,  prereqs: ['crystal_shard'],           description: 'Tiny arc, no damage. Plops a glinting decoy on the ground to steal an eye or a shot.' },
     { id: 'crystal_spire',   label: 'Crystal Spire',     type: 'spell',   tier: 3,  x: 0.5,  prereqs: ['shard_burst', 'tremor_sense'], description: 'Erupts at target after 0.4s. Punishes predictability.' },
     { id: 'geologic',        label: 'Geologic',          type: 'passive', tier: 4,  x: 0.5,  prereqs: ['crystal_spire'],           description: 'Each cast increases defense. Stacks 4×. Resets on hit.' },
     { id: 'crystal_wall',    label: 'Crystal Wall',      type: 'spell',   tier: 5,  x: 0.5,  prereqs: ['geologic'],                description: 'Crystalline wall. Tougher than Ice Wall. 15s duration.' },

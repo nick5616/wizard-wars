@@ -14,6 +14,7 @@ import { AmaterasuSpell } from './AmaterasuSpell';
 import { LightningStrikeSpell } from './LightningStrikeSpell';
 import { ChainLightningArc } from './ChainLightningArc';
 import { RuneSpell } from './RuneSpell';
+import { GemPlopSpell } from './GemPlopSpell';
 
 export function SpellRenderer() {
   const projectiles = useGameStore((s) => s.projectiles);
@@ -57,6 +58,9 @@ export function SpellRenderer() {
         }
         if (effect.type === 'rune') {
           return <RuneSpell key={effect.id} effect={effect} />;
+        }
+        if (effect.type === 'gem_decoy') {
+          return <GemPlopSpell key={effect.id} effect={effect} />;
         }
         return null;
       })}

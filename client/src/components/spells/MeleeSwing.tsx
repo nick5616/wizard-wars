@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import type { EffectState } from '../../types/game.types';
 import { getSpell } from 'shared/spells';
 import { createBladeGeometry } from '../../utils/bladeGeometry';
+import { createRupeeGeometry } from '../../utils/rupeeGeometry';
 
 interface MeleeSwingProps {
   effect: EffectState;
@@ -14,14 +15,18 @@ const ARC_SEGMENTS = 8;
 const SHARD_COUNT = 5;
 const UP_AXIS = new THREE.Vector3(0, 1, 0);
 
-// Short-lived arc in front of the attacker. Sword's Pommel Strike gets a fan
-// of small shiny blade shards frozen along the swing path -- everyone else's
-// punch keeps the plain flash line (a fist doesn't need to look like metal).
+// Short-lived arc in front of the attacker. Sword's Pommel Strike and
+// Crystalmancer's Crystal Fist get a fan of small shiny shards frozen along
+// the swing path (blade steel for one, glinting gem for the other) --
+// everyone else's punch keeps the plain flash line.
 export function MeleeSwing({ effect }: MeleeSwingProps) {
   const groupRef = useRef<THREE.Group>(null);
   const shardMeshRefs = useRef<(THREE.Mesh | null)[]>([]);
   const { origin, direction, color = '#ffffff', createdAt, expiresAt, spellId } = effect;
-  const isSword = spellId ? getSpell(spellId)?.class === 'sword' : false;
+  const spellClass = spellId ? getSpell(spellId)?.class : null;
+  const isSword = spellClass === 'sword';
+  const isCrystal = spellClass === 'crystalmancer';
+  const isShardBurst = isSword || isCrystal;
 
   const arc = useMemo(() => {
     if (!origin || !direction) return null;
@@ -41,21 +46,21 @@ export function MeleeSwing({ effect }: MeleeSwingProps) {
   }, [origin?.x, origin?.y, origin?.z, direction?.x, direction?.z]);
 
   const lineObj = useMemo(() => {
-    if (isSword || !arc) return null;
+    if (isShardBurst || !arc) return null;
     const geo = new THREE.BufferGeometry().setFromPoints(arc.points);
     const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 1 });
     return new THREE.Line(geo, mat);
-  }, [isSword, arc, color]);
+  }, [isShardBurst, arc, color]);
 
   const shardScene = useMemo(() => {
-    if (!isSword || !arc) return null;
+    if (!isShardBurst || !arc) return null;
     const mat = new THREE.MeshStandardMaterial({
       color, emissive: color, emissiveIntensity: 1.4,
-      flatShading: true, roughness: 0.2, metalness: 0.75,
+      flatShading: true, roughness: isCrystal ? 0.05 : 0.2, metalness: isCrystal ? 0.85 : 0.75,
     });
-    const geometry = createBladeGeometry(0.55, 0.32, 0.1);
+    const geometry = isCrystal ? createRupeeGeometry(0.28, 0.5) : createBladeGeometry(0.55, 0.32, 0.1);
     return { mat, geometry };
-  }, [isSword, arc, color]);
+  }, [isShardBurst, isCrystal, arc, color]);
 
   useEffect(() => () => {
     lineObj?.geometry.dispose();

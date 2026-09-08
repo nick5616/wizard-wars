@@ -1,12 +1,15 @@
 /**
- * Pre-cast ground preview for any equipped aoe spell: a circle (or, for
- * line-shaped spells like Fissure, a rectangle) showing where it will land
- * and how big it is, colored per spell, before you've even clicked. Snaps
- * under a player the crosshair is over, mirroring the server's own
- * ground-snap targeting (see SpellSystem._groundTargetPos) so the preview
- * matches where it actually lands, for every aimed aoe spell -- not just
- * Lightning Strike. Carries a few faint ambient sparks for that "something's
- * about to happen here" read.
+ * Pre-cast ground preview for any equipped aoe or arc spell: a circle (or,
+ * for line-shaped spells like Fissure, a rectangle) showing where it will
+ * land and how big it is, colored per spell, before you've even clicked.
+ * Aoe spells snap under a player the crosshair is over, mirroring the
+ * server's own ground-snap targeting (see SpellSystem._groundTargetPos).
+ * Arc spells (Fireball, ...) instead run the same ballistic-range formula
+ * as SpellSystem._castProjectile/tickProjectiles -- speed, gravity band, and
+ * the movement-curved launch angle -- off the live local velocity, so a
+ * lobbed spell's landing ring matches where it will actually come down, not
+ * just a fixed aim distance. Carries a few faint ambient sparks for that
+ * "something's about to happen here" read.
  */
 
 import { useMemo, useRef, useEffect } from 'react';
@@ -16,6 +19,11 @@ import { useGameStore } from '../../stores/gameStore';
 import { getTargetObjects } from '../../networking/targetRegistry';
 import { getSpell } from 'shared/spells';
 import { buildJaggedSegment } from '../../utils/jaggedLine';
+import { PROJECTILE_GRAVITY } from 'shared/gameConfig';
+import {
+  MOVE_CURVE_SPEED_CAP, BASE_ARC_ANGLE_DEG, ARC_ANGLE_SWING_DEG, MIN_ARC_ANGLE_DEG, MAX_ARC_ANGLE_DEG,
+} from 'shared/constants';
+import type { SpellDef } from '../../types/game.types';
 
 const AIM_DIST = 12;
 const SPARK_COUNT = 4;
@@ -41,8 +49,11 @@ export function AoeTargetReticle() {
 
   const spellId = local.equippedSpells[local.activeSlot];
   const onCooldown = (local.cooldowns[spellId ?? ''] ?? 0) > 0;
-  const spell = spellId ? getSpell(spellId) : null;
-  const isPreviewable = !!spell && spell.type === 'aoe' && !spell.isBarrier;
+  // getSpell comes from untyped shared JS, so name the type here -- without
+  // it `spell.gravity` is `any` and can't index PROJECTILE_GRAVITY.
+  const spell = (spellId ? getSpell(spellId) : null) as SpellDef | null;
+  const isArc = spell?.type === 'arc';
+  const isPreviewable = !!spell && ((spell.type === 'aoe' && !spell.isBarrier) || isArc);
   const active = local.isAlive && isPreviewable && !onCooldown;
 
   const radius = spell?.radius ?? 2;
@@ -90,7 +101,27 @@ export function AoeTargetReticle() {
       camera.getWorldDirection(fwd);
       const origin = new THREE.Vector3(local.position.x, local.position.y, local.position.z);
 
-      if (isLine) {
+      if (isArc) {
+        const horizLen = Math.hypot(fwd.x, fwd.z) || 1;
+        const dirX = fwd.x / horizLen, dirZ = fwd.z / horizLen;
+
+        // Bend by the live strafe curve -- same formula as the server's
+        // curveRad in SpellSystem._castProjectile, just already in degrees.
+        const curveRad = (local.moveCurveDeg * Math.PI) / 180;
+        const cos = Math.cos(curveRad), sin = Math.sin(curveRad);
+        const bentX = dirX * cos - dirZ * sin;
+        const bentZ = dirX * sin + dirZ * cos;
+
+        const launchAngleDeg = Math.max(MIN_ARC_ANGLE_DEG, Math.min(MAX_ARC_ANGLE_DEG,
+          BASE_ARC_ANGLE_DEG - (local.moveForwardRatio / MOVE_CURVE_SPEED_CAP) * ARC_ANGLE_SWING_DEG));
+        const launchAngleRad = (launchAngleDeg * Math.PI) / 180;
+        const gravity = Math.abs(PROJECTILE_GRAVITY[spell?.gravity ?? 'normal'] ?? PROJECTILE_GRAVITY.normal);
+        const speed = spell?.speed ?? 20;
+        const range = (speed * speed * Math.sin(2 * launchAngleRad)) / gravity;
+
+        cx = origin.x + bentX * range;
+        cz = origin.z + bentZ * range;
+      } else if (isLine) {
         cx = origin.x;
         cz = origin.z;
         ry = Math.atan2(fwd.x, fwd.z);

@@ -12,6 +12,8 @@ import type { EffectState } from '../../types/game.types';
 import { getSpell } from 'shared/spells';
 import { buildJaggedSegment } from '../../utils/jaggedLine';
 import { createBladeGeometry } from '../../utils/bladeGeometry';
+import { createRupeeGeometry } from '../../utils/rupeeGeometry';
+import { crystalShine } from '../../utils/crystalMaterial';
 
 const SIDES_BY_SCHOOL: Record<string, number> = { fire: 3, ice: 6, dark: 5, sword: 4, druid: 5, crystalmancer: 8 };
 const BURST_COUNT = 7;
@@ -43,6 +45,8 @@ export function RuneSpell({ effect }: { effect: EffectState }) {
   const sides = SIDES_BY_SCHOOL[school] ?? 5;
   const triggered = !!effect.triggered;
   const isSword = school === 'sword';
+  const isCrystal = school === 'crystalmancer';
+  const isShardBurst = isSword || isCrystal;
 
   const scene = useMemo(() => {
     const sigilGeo = new THREE.BufferGeometry();
@@ -55,7 +59,7 @@ export function RuneSpell({ effect }: { effect: EffectState }) {
     const burstMat = new THREE.LineBasicMaterial({ color: glow, transparent: true, opacity: 0 });
     const burstGeos: THREE.BufferGeometry[] = [];
     const burstLines: THREE.Line[] = [];
-    for (let i = 0; i < (isSword ? 0 : BURST_COUNT); i++) {
+    for (let i = 0; i < (isShardBurst ? 0 : BURST_COUNT); i++) {
       const geo = new THREE.BufferGeometry();
       burstGeos.push(geo);
       burstLines.push(new THREE.Line(geo, burstMat));
@@ -63,25 +67,31 @@ export function RuneSpell({ effect }: { effect: EffectState }) {
 
     return { sigilGeo, sigilMat, sigilLine, ringMat, burstMat, burstGeos, burstLines };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effect.id, color, glow, sides, radius, isSword]);
+  }, [effect.id, color, glow, sides, radius, isShardBurst]);
 
-  // Sword rune detonations throw shiny blade shards instead of jagged spark
-  // lines -- same treatment as AoeSpell's sword burst, see that file for why.
+  // Sword rune detonations throw shiny blade shards, Crystalmancer runes
+  // throw glinting gem shards (crystalMaterial.ts's "shine" recipe) -- both
+  // instead of jagged spark lines. Same treatment as AoeSpell's burst, see
+  // that file for why.
   const shardScene = useMemo(() => {
-    if (!isSword) return null;
-    const mat = new THREE.MeshPhysicalMaterial({
-      color, flatShading: true, roughness: 0.1, metalness: 0.9,
-      clearcoat: 1, clearcoatRoughness: 0.05, ior: 2.0, reflectivity: 1,
-      transparent: true, opacity: 0,
-    });
-    const geometry = createBladeGeometry(radius * 0.3, radius * 0.2, radius * 0.08);
+    if (!isShardBurst) return null;
+    const mat = isCrystal
+      ? new THREE.MeshPhysicalMaterial({ ...crystalShine(color), opacity: 0 })
+      : new THREE.MeshPhysicalMaterial({
+        color, flatShading: true, roughness: 0.1, metalness: 0.9,
+        clearcoat: 1, clearcoatRoughness: 0.05, ior: 2.0, reflectivity: 1,
+        transparent: true, opacity: 0,
+      });
+    const geometry = isCrystal
+      ? createRupeeGeometry(radius * 0.2, radius * 0.35)
+      : createBladeGeometry(radius * 0.3, radius * 0.2, radius * 0.08);
     const shards = Array.from({ length: BURST_COUNT }, () => ({
       end: new THREE.Vector3(),
       quat: new THREE.Quaternion(),
     }));
     return { mat, geometry, shards };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effect.id, isSword, color, radius]);
+  }, [effect.id, isShardBurst, isCrystal, color, radius]);
 
   useEffect(() => () => {
     scene.sigilGeo.dispose();

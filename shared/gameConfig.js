@@ -60,9 +60,13 @@ export const DOMAIN_CONFIGS = {
   },
 };
 
+// Tuned steep: fast initial speed + strong pull down so 'arc' spells read as
+// a quick, decisive lob instead of a long howitzer shot that clears half the
+// arena (ARENA_RADIUS is 30 -- see shared/spells.js arc entries for the
+// resulting ranges).
 export const PROJECTILE_GRAVITY = {
   none: 0,
-  slight: -3,
-  normal: -9,
-  heavy: -18,
+  slight: -48,
+  normal: -55,
+  heavy: -65,
 };

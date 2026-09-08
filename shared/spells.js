@@ -40,7 +40,7 @@ export const FIRE_SPELLS = {
   }),
   fireball: def({
     id: 'fireball', name: 'Fireball', school: 'fire', tier: 2, class: 'fire',
-    type: 'arc', gravity: 'normal', damage: 85, cooldown: 2.2, speed: 24, radius: 2.5,
+    type: 'arc', gravity: 'normal', damage: 85, cooldown: 2.2, speed: 36, radius: 2.5,
     statusEffect: 'burn', statusDuration: 1500,
     color: '#ff4500', glowColor: '#ff8c00',
   }),
@@ -209,7 +209,7 @@ export const ICE_SPELLS = {
     id: 'glacial_lob', name: 'Glacial Lob', school: 'ice', tier: 2, class: 'ice',
     // Arced ice boulder -- shatters into a frost-nova slow field wherever it lands
     // (see SpellSystem._explodeAtPosition, triggers on any floor impact with radius > 0.8).
-    type: 'arc', gravity: 'normal', damage: 55, cooldown: 3.0, speed: 20, radius: 1.4,
+    type: 'arc', gravity: 'normal', damage: 55, cooldown: 3.0, speed: 30, radius: 1.4,
     statusEffect: 'slow', statusDuration: 1800,
     color: '#a0d8ff', glowColor: '#00c8ff',
   }),
@@ -306,7 +306,7 @@ export const DARK_SPELLS = {
   hex_bomb: def({
     id: 'hex_bomb', name: 'Hex Bomb', school: 'dark', tier: 2, class: 'dark',
     // Lobbed void orb -- onImpact reuses Void Bloom's pull-together tendril zone.
-    type: 'arc', gravity: 'normal', damage: 50, cooldown: 3.0, speed: 18, radius: 2.2,
+    type: 'arc', gravity: 'normal', damage: 50, cooldown: 3.0, speed: 28, radius: 2.2,
     onImpact: 'void_tendrils',
     color: '#4400aa', glowColor: '#6600cc',
   }),
@@ -397,7 +397,7 @@ export const SWORD_SPELLS = {
     id: 'thrown_blade', name: 'Thrown Blade', school: 'sword', tier: 2, class: 'sword',
     // Flat, hard-thrown spinning blade -- lighter gravity than Fireball, a
     // quicker/flatter arc rather than a high lob. Direct-hit only, no AoE.
-    type: 'arc', gravity: 'slight', damage: 70, cooldown: 2.0, speed: 26, radius: 0.5,
+    type: 'arc', gravity: 'slight', damage: 70, cooldown: 2.0, speed: 36, radius: 0.5,
     color: '#c8c8c8', glowColor: '#ffffff',
   }),
 };
@@ -420,7 +420,7 @@ export const DRUID_SPELLS = {
   spore_pod: def({
     id: 'spore_pod', name: 'Spore Pod', school: 'druid', tier: 2.5, class: 'druid',
     // Lobbed seed pod -- blooms into a brief entangling root patch on impact.
-    type: 'arc', gravity: 'normal', damage: 45, cooldown: 3.2, speed: 19, radius: 1.6,
+    type: 'arc', gravity: 'normal', damage: 45, cooldown: 3.2, speed: 29, radius: 1.6,
     statusEffect: 'slow', statusDuration: 2200,
     color: '#5a9e3d', glowColor: '#8fd15a',
   }),
@@ -498,8 +498,17 @@ export const CRYSTALMANCER_SPELLS = {
   geode_bomb: def({
     id: 'geode_bomb', name: 'Geode Bomb', school: 'crystalmancer', tier: 2.5, class: 'crystalmancer',
     // Lobbed crystal -- falls fast (heavy gravity) and shatters into a shrapnel burst.
-    type: 'arc', gravity: 'heavy', damage: 65, cooldown: 3.5, speed: 17, radius: 1.8,
+    type: 'arc', gravity: 'heavy', damage: 65, cooldown: 3.5, speed: 26, radius: 1.8,
     color: '#8fd4ff', glowColor: '#c8f0ff',
+  }),
+  gem_plop: def({
+    id: 'gem_plop', name: 'Gem Plop', school: 'crystalmancer', tier: 2.5, class: 'crystalmancer',
+    // No damage, no explosion -- a quick underhand toss that lands close and
+    // just sits there glinting. A bright, unmistakable decoy: something for
+    // an eye (or a shot) to catch on that isn't you. See onImpact handling
+    // in SpellSystem.tickProjectiles / _spawnGemDecoy.
+    type: 'arc', gravity: 'heavy', onImpact: 'gem_decoy', damage: 0, cooldown: 6.0, speed: 18, radius: 0.4,
+    color: '#39ff6a', glowColor: '#baffd9',
   }),
   crystal_spire: def({
     id: 'crystal_spire', name: 'Crystal Spire', school: 'crystalmancer', tier: 3, class: 'crystalmancer',

@@ -241,13 +241,18 @@ export function CameraController({ ws, prediction }: Props) {
 
     // Live preview of the movement-curve tech (see SpellSystem._castProjectile
     // server-side) so players can feel/learn how their current strafe would
-    // bend a shot before they even cast -- same yaw basis, same formula.
+    // bend a shot before they even cast -- same yaw basis, same formula. The
+    // forward/backpedal ratio rides along for AoeTargetReticle's arc-landing
+    // preview, which needs it to reproduce the server's launch-angle pick.
     {
       const yaw = yawRef.current;
       const rightX = Math.cos(yaw), rightZ = -Math.sin(yaw);
+      const fwdX = -Math.sin(yaw), fwdZ = -Math.cos(yaw);
       const lateralSpeed = result.vel.x * rightX + result.vel.z * rightZ;
+      const forwardSpeed = result.vel.x * fwdX + result.vel.z * fwdZ;
       const lateralRatio = Math.max(-MOVE_CURVE_SPEED_CAP, Math.min(MOVE_CURVE_SPEED_CAP, lateralSpeed / BASE_MOVE_SPEED));
-      setLocalMoveCurve((lateralRatio / MOVE_CURVE_SPEED_CAP) * MAX_CURVE_DEG);
+      const forwardRatio = Math.max(-MOVE_CURVE_SPEED_CAP, Math.min(MOVE_CURVE_SPEED_CAP, forwardSpeed / BASE_MOVE_SPEED));
+      setLocalMoveCurve((lateralRatio / MOVE_CURVE_SPEED_CAP) * MAX_CURVE_DEG, forwardRatio);
     }
 
     // ── Send input to server at 64Hz ────────────────────────────────────────

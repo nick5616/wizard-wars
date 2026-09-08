@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useGameStore, type MatchResultPlayer } from '../../stores/gameStore';
 import { useNetworkStore } from '../../stores/networkStore';
 import { C2S } from 'shared/events';
@@ -22,6 +22,11 @@ const PLACE_STYLE = [
 ];
 // Visual left-to-right order for a classic podium (tallest in the middle).
 const PODIUM_LAYOUT = [1, 0, 2];
+
+// Whatever key/click was mid-flight for the game (a last cast, a keydown
+// that hadn't released yet) would otherwise land on this screen the instant
+// it mounts and instantly skip it. Swallow input for a beat first.
+const INPUT_GRACE_MS = 500;
 
 /** Shown when S2C.MATCH_END fires (see Room._maybeEndMatch) -- podium + damage standings for the single-player match. */
 export function MatchEndScreen({ ws }: MatchEndScreenProps) {
@@ -54,7 +59,10 @@ export function MatchEndScreen({ ws }: MatchEndScreenProps) {
     return rankDiff !== 0 ? rankDiff : b.damageDealt - a.damageDealt;
   });
 
+  const inputArmedRef = useRef(false);
+
   function returnToMenu() {
+    if (!inputArmedRef.current) return;
     ws.send(C2S.LEAVE_ROOM, {});
     useGameStore.getState().setMatchResult(null);
     useGameStore.getState().setMatchActive(false);
@@ -65,15 +73,23 @@ export function MatchEndScreen({ ws }: MatchEndScreenProps) {
   // release it so the cursor (and the Return to Menu button) is actually
   // visible, and let any key or a click anywhere on the screen continue,
   // same as DeathScreen, rather than requiring the un-discoverable "press
-  // Escape first" step to even see a clickable button.
+  // Escape first" step to even see a clickable button. Input stays swallowed
+  // for INPUT_GRACE_MS first, though, so whatever click/keydown was still
+  // in flight for the game a moment ago doesn't instantly skip this screen.
   useEffect(() => {
     if (document.pointerLockElement) document.exitPointerLock();
+
+    inputArmedRef.current = false;
+    const armTimer = setTimeout(() => { inputArmedRef.current = true; }, INPUT_GRACE_MS);
 
     function onKeyDown() {
       returnToMenu();
     }
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      clearTimeout(armTimer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

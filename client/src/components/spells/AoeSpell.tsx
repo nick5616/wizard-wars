@@ -16,6 +16,8 @@ import type { EffectState } from '../../types/game.types';
 import { getSpell } from 'shared/spells';
 import { buildJaggedSegment } from '../../utils/jaggedLine';
 import { createBladeGeometry } from '../../utils/bladeGeometry';
+import { createRupeeGeometry } from '../../utils/rupeeGeometry';
+import { crystalShine } from '../../utils/crystalMaterial';
 
 const UP_AXIS = new THREE.Vector3(0, 1, 0);
 const FORWARD_AXIS = new THREE.Vector3(0, 0, 1);
@@ -64,6 +66,8 @@ export function AoeSpell({ effect }: { effect: EffectState }) {
   const startedAt = effect.startedAt ?? activatesAt;
   const lingers = (effect.duration ?? 0) > 0;
   const isSword = school === 'sword';
+  const isCrystal = school === 'crystalmancer';
+  const isShardBurst = isSword || isCrystal;
 
   const rotY = isLine && effect.direction ? Math.atan2(effect.direction.x, effect.direction.z) : 0;
   const centerX = isLine && effect.direction && effect.length
@@ -73,38 +77,44 @@ export function AoeSpell({ effect }: { effect: EffectState }) {
     ? effect.position.z + effect.direction.z * effect.length * 0.5
     : effect.position.z;
 
-  // Sword impact bursts are real metal, not particle sparks -- a handful of
-  // small blade-shard meshes that fly outward from the impact and catch the
-  // scene's actual lights, instead of thin (and near-invisible) 1px WebGL
-  // lines. Every other school keeps the jagged-line burst below.
+  // Sword and Crystalmancer impact bursts are real solid shrapnel, not
+  // particle sparks -- a handful of small shard meshes that fly outward from
+  // the impact and catch the scene's actual lights, instead of thin (and
+  // near-invisible) 1px WebGL lines. Sword gets a bare-steel blade shard,
+  // Crystalmancer gets a glinting gem shard (see crystalMaterial.ts's
+  // "shine" recipe). Every other school keeps the jagged-line burst below.
   const burstScene = useMemo(() => {
     const mat = new THREE.LineBasicMaterial({ color: glow, transparent: true, opacity: 0 });
     const geos: THREE.BufferGeometry[] = [];
     const lines: THREE.Line[] = [];
-    for (let i = 0; i < (isSword ? 0 : spec.count); i++) {
+    for (let i = 0; i < (isShardBurst ? 0 : spec.count); i++) {
       const geo = new THREE.BufferGeometry();
       geos.push(geo);
       lines.push(new THREE.Line(geo, mat));
     }
     return { mat, geos, lines };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effect.id, glow, spec.count, isSword]);
+  }, [effect.id, glow, spec.count, isShardBurst]);
 
   const shardScene = useMemo(() => {
-    if (!isSword) return null;
-    const mat = new THREE.MeshPhysicalMaterial({
-      color, flatShading: true, roughness: 0.1, metalness: 0.9,
-      clearcoat: 1, clearcoatRoughness: 0.05, ior: 2.0, reflectivity: 1,
-      transparent: true, opacity: 0,
-    });
-    const geometry = createBladeGeometry(radius * 0.34, radius * 0.24, radius * 0.09);
+    if (!isShardBurst) return null;
+    const mat = isCrystal
+      ? new THREE.MeshPhysicalMaterial({ ...crystalShine(color), opacity: 0 })
+      : new THREE.MeshPhysicalMaterial({
+        color, flatShading: true, roughness: 0.1, metalness: 0.9,
+        clearcoat: 1, clearcoatRoughness: 0.05, ior: 2.0, reflectivity: 1,
+        transparent: true, opacity: 0,
+      });
+    const geometry = isCrystal
+      ? createRupeeGeometry(radius * 0.22, radius * 0.4)
+      : createBladeGeometry(radius * 0.34, radius * 0.24, radius * 0.09);
     const shards = Array.from({ length: spec.count }, () => ({
       end: new THREE.Vector3(),
       quat: new THREE.Quaternion(),
     }));
     return { mat, geometry, shards };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effect.id, isSword, color, spec.count, radius]);
+  }, [effect.id, isShardBurst, isCrystal, color, spec.count, radius]);
 
   useEffect(() => () => {
     for (const g of burstScene.geos) g.dispose();

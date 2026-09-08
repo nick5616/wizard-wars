@@ -1032,10 +1032,17 @@ export class SpellSystem {
         }
       }
 
-      // Floor collision → AoE explosion if the spell has a radius
-      if (proj.position.y <= 0.1 && proj.radius > 0.8) {
-        this._explodeAtPosition(proj);
-        toRemove.push(id);
+      // Floor collision → AoE explosion if the spell has a radius, or a
+      // decoy prop for onImpact === 'gem_decoy' (too small a radius to
+      // ever hit the >0.8 explosion branch above).
+      if (proj.position.y <= 0.1) {
+        if (proj.radius > 0.8) {
+          this._explodeAtPosition(proj);
+          toRemove.push(id);
+        } else if (projSpell?.onImpact === 'gem_decoy') {
+          this._spawnGemDecoy({ x: proj.position.x, y: 0, z: proj.position.z }, proj.ownerId);
+          toRemove.push(id);
+        }
       }
     }
 
@@ -1226,6 +1233,27 @@ export class SpellSystem {
       activatesAt: Date.now(),
       expiresAt: Date.now() + 3000,
       triggered: false,
+      active: true,
+    });
+  }
+
+  /** Gem Plop's onImpact: a decoy rupee that sits and glints where it lands.
+   * No damage, no trigger, no pickup -- purely a bright thing for an eye (or
+   * a shot) to catch on that isn't the caster. */
+  _spawnGemDecoy(position, ownerId) {
+    const id = uuid();
+    this.room.effects.set(id, {
+      id,
+      type: 'gem_decoy',
+      spellId: 'gem_plop',
+      school: 'crystalmancer',
+      color: '#39ff6a',
+      glowColor: '#baffd9',
+      ownerId,
+      position,
+      radius: 0.4,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 8000,
       active: true,
     });
   }

@@ -21,6 +21,7 @@ const DOMAIN_CONFIG: Record<string, { fogColor: string; fogDensity: number; ambi
   event_horizon:   { fogColor: '#110022', fogDensity: 0.018, ambientColor: '#330055', particleColor: '#8800ff' },
   the_last_word:   { fogColor: '#222222', fogDensity: 0.008, ambientColor: '#666666', particleColor: '#ffffff' },
   terra_domain:    { fogColor: '#331100', fogDensity: 0.014, ambientColor: '#553300', particleColor: '#886622' },
+  prism_field:     { fogColor: '#2a1a44', fogDensity: 0.012, ambientColor: '#8fd4ff', particleColor: '#c8f0ff' },
 };
 
 export function DomainExpansion({ domain }: DomainExpansionProps) {

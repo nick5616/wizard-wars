@@ -31,6 +31,7 @@ interface LocalPlayerState {
   parryActive: boolean;
   phantomCasts: number;
   moveCurveDeg: number; // live strafe-curve bend, for the Crosshair indicator -- see CameraController
+  moveForwardRatio: number; // live forward/backpedal ratio (-CAP..CAP), for the arc-spell landing reticle -- see CameraController
 }
 
 export interface MatchResultPlayer {
@@ -154,7 +155,7 @@ interface GameState {
   setVoteState: (v: VoteState | null) => void;
   setLastDeath: (v: GameState['lastDeath']) => void;
   setLocalPosition: (pos: Vec3) => void;
-  setLocalMoveCurve: (deg: number) => void;
+  setLocalMoveCurve: (deg: number, forwardRatio: number) => void;
   setLocalAlive: (v: boolean) => void;
   addUnlockedNode: (nodeId: string) => void;
   addRevealedLore: (nodeId: string) => void;
@@ -205,6 +206,7 @@ const defaultLocal: LocalPlayerState = {
   parryActive: false,
   phantomCasts: 0,
   moveCurveDeg: 0,
+  moveForwardRatio: 0,
 };
 
 export const useGameStore = create<GameState>((set, get) => ({
@@ -315,8 +317,10 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   setLocalPosition: (pos) => set((s) => ({ local: { ...s.local, position: pos } })),
 
-  setLocalMoveCurve: (deg) => set((s) => (
-    s.local.moveCurveDeg === deg ? s : { local: { ...s.local, moveCurveDeg: deg } }
+  setLocalMoveCurve: (deg, forwardRatio) => set((s) => (
+    s.local.moveCurveDeg === deg && s.local.moveForwardRatio === forwardRatio
+      ? s
+      : { local: { ...s.local, moveCurveDeg: deg, moveForwardRatio: forwardRatio } }
   )),
 
   setLocalAlive: (v) => set((s) => ({ local: { ...s.local, isAlive: v } })),

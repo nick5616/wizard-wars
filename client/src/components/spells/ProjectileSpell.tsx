@@ -5,6 +5,8 @@ import { getSpell } from 'shared/spells';
 import { PROJECTILE_GRAVITY } from 'shared/gameConfig';
 import type { ProjectileState, SpellDef } from '../../types/game.types';
 import { createBladeGeometry } from '../../utils/bladeGeometry';
+import { createRupeeGeometry } from '../../utils/rupeeGeometry';
+import { crystalShine } from '../../utils/crystalMaterial';
 
 interface ProjectileSpellProps {
   projectile: ProjectileState;
@@ -13,6 +15,7 @@ interface ProjectileSpellProps {
 export function ProjectileSpell({ projectile }: ProjectileSpellProps) {
   const coreRef    = useRef<THREE.Mesh>(null);
   const bladeRef   = useRef<THREE.Mesh>(null);
+  const crystalRef = useRef<THREE.Mesh>(null);
   const glowRef    = useRef<THREE.Mesh>(null);
   const trailRef   = useRef<THREE.Mesh>(null);
   const light1Ref  = useRef<THREE.PointLight>(null);
@@ -43,6 +46,21 @@ export function ProjectileSpell({ projectile }: ProjectileSpellProps) {
     () => (isBlade ? createBladeGeometry(coreRadius * 3.2, coreRadius * 2.4, coreRadius * 0.85) : null),
     [isBlade, coreRadius],
   );
+
+  // Crystalmancer projectiles (Crystal Shard, Shard Burst, Geode Bomb) fly as
+  // a faceted gem instead of the generic glowing orb -- the same "shine"
+  // material GemPlopSpell's rupee uses (see crystalMaterial.ts), just scaled
+  // to each spell's own radius so Crystal Shard reads as a small shard and
+  // Geode Bomb as a heavy chunk. Unlike the blade it keeps its glow shell,
+  // trail and light -- this is charged magic, not inert steel -- and tumbles
+  // in flight instead of holding a fixed heading, so its facets keep catching
+  // the light as it travels.
+  const isCrystal = spell?.class === 'crystalmancer' && (spell.type === 'projectile' || spell.type === 'arc');
+  const crystalGeometry = useMemo(
+    () => (isCrystal ? createRupeeGeometry(coreRadius * 1.3, coreRadius * 2.3) : null),
+    [isCrystal, coreRadius],
+  );
+  const crystalMaterialProps = useMemo(() => (isCrystal ? crystalShine(color) : null), [isCrystal, color]);
 
   // Multi-projectile spread casts (Bladestorm, Dirt Clod, ...) spawn several
   // of these at once -- 2 point lights apiece was the single biggest lag
@@ -110,6 +128,14 @@ export function ProjectileSpell({ projectile }: ProjectileSpellProps) {
       coreRef.current.position.set(x, y, z);
       coreRef.current.scale.setScalar(pulse);
     }
+    if (crystalRef.current) {
+      crystalRef.current.position.set(x, y, z);
+      crystalRef.current.scale.setScalar(pulse);
+      // Tumble on two axes (unlike the blade, which holds its heading) so
+      // different facets keep catching the light as it flies.
+      crystalRef.current.rotation.x += delta * 4.5;
+      crystalRef.current.rotation.z += delta * 3.1;
+    }
     if (bladeRef.current) {
       bladeRef.current.position.set(x, y, z);
       // Holds its heading (velocity-aligned) with no extra spin -- a stable
@@ -161,11 +187,17 @@ export function ProjectileSpell({ projectile }: ProjectileSpellProps) {
         </mesh>
       ) : (
         <>
-          {/* Solid bright core — meshBasicMaterial so it's always full-bright */}
-          <mesh ref={coreRef} position={ip}>
-            <sphereGeometry args={[coreRadius, 12, 12]} />
-            <meshBasicMaterial color={color} />
-          </mesh>
+          {isCrystal && crystalGeometry && crystalMaterialProps ? (
+            <mesh ref={crystalRef} position={ip} geometry={crystalGeometry}>
+              <meshPhysicalMaterial {...crystalMaterialProps} />
+            </mesh>
+          ) : (
+            /* Solid bright core — meshBasicMaterial so it's always full-bright */
+            <mesh ref={coreRef} position={ip}>
+              <sphereGeometry args={[coreRadius, 12, 12]} />
+              <meshBasicMaterial color={color} />
+            </mesh>
+          )}
 
           {/* Large translucent glow shell */}
           <mesh ref={glowRef} position={ip}>
