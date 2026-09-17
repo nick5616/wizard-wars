@@ -113,6 +113,7 @@ export const SKILL_TREES = {
     { id: 'thick_bark',      label: 'Thick Bark',        type: 'passive', tier: 2,  x: 0.75, prereqs: ['thorn_dart'],              description: '-5% damage received. -10% below half HP.' },
     { id: 'rune_root',       label: 'Root Rune',         type: 'spell',   tier: 2,  x: 0.45, prereqs: ['thorn_dart'],              description: 'Place a rune. Detonates on the first enemy to step in it.' },
     { id: 'spore_pod',       label: 'Spore Pod',         type: 'spell',   tier: 2.5,x: 0.9,  prereqs: ['thorn_dart'],              description: 'Lobbed seed pod. Blooms into a brief entangling root patch.' },
+    { id: 'summon_airbud',   label: 'Summon Airbud',     type: 'spell',   tier: 2.5,x: 0.3,  prereqs: ['thorn_dart'],              description: 'Summon a not-very-bright Airbud. It hops at enemies. If it lands on you, you die.' },
     { id: 'bramble_burst',   label: 'Bramble Burst',     type: 'spell',   tier: 3,  x: 0.5,  prereqs: ['seed_burst', 'thick_bark'], description: 'Thorny eruption at target after 0.4s. Punishes predictability.' },
     { id: 'deep_roots',      label: 'Deep Roots',        type: 'passive', tier: 4,  x: 0.5,  prereqs: ['bramble_burst'],           description: 'Root network senses movement through nearby walls.' },
     { id: 'root_snare',      label: 'Root Snare',        type: 'spell',   tier: 5,  x: 0.5,  prereqs: ['deep_roots'],              description: 'Encases enemy in living wood 2.5s. Full CC. Long cast.' },

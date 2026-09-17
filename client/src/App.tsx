@@ -96,6 +96,35 @@ export default function App() {
     const blocking = showPauseMenu || showExperimentLab || showDesignLab || menuPhase || voteState?.blocking === true;
     useGameStore.getState().setMenuOpen(blocking);
   }, [showPauseMenu, showExperimentLab, showDesignLab, phase, voteState]);
+
+  // Music bed: pause menu wins over everything, then the menu flow, then the
+  // death sting (on the death screen and a DEFEATED match end). The sting is
+  // one-shot per screen -- closing the pause menu while still dead goes
+  // silent rather than replaying it.
+  const stingPlayedForPhaseRef = useRef<string | null>(null);
+  useEffect(() => {
+    // matchResult is always set before phase flips to 'match_end' (see the
+    // MATCH_END handler), so reading it here is safe without subscribing.
+    const { matchResult, local } = useGameStore.getState();
+    const defeated = phase === 'match_end' && matchResult?.winningTeam != null && matchResult.winningTeam !== local.team;
+    const stingPhase = phase === 'dead' || defeated;
+    if (!stingPhase) stingPlayedForPhaseRef.current = null;
+    const inMainMenu = phase === 'main_menu' || phase === 'mode_select' || phase === 'duel_select' || phase === 'class_select' || phase === 'connecting';
+    if (showPauseMenu) {
+      audioManager.playMusic('music_pause');
+    } else if (inMainMenu) {
+      audioManager.playMusic('music_menu');
+    } else if (stingPhase && stingPlayedForPhaseRef.current !== phase) {
+      stingPlayedForPhaseRef.current = phase;
+      // Stop first so dying straight into a defeat restarts the sting rather
+      // than no-oping on the same track id.
+      audioManager.stopMusic(150);
+      audioManager.playMusic('music_death', { fadeMs: 150 });
+    } else {
+      audioManager.stopMusic();
+    }
+  }, [phase, showPauseMenu]);
+
   const {
     setPhase, applyTick, setLocalClass, addKillFeedEntry, setLocalAlive, setLocalPosition, spawnDamageNumber,
     pushNotification, setVoteState, setLastDeath, setMatchActive, setMatchResult, setMatchCountdownEndsAt,

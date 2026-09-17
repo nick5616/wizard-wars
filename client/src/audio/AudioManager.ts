@@ -20,6 +20,7 @@ class AudioManager {
   private warned = new Set<string>();
 
   private musicSource: AudioBufferSourceNode | null = null;
+  private musicSourceGain: GainNode | null = null;
   private currentMusicId: string | null = null;
   private unlocked = false;
 
@@ -41,6 +42,14 @@ class AudioManager {
       if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => {});
     } catch {
       this.ctx = null; // any failure here just means: no sound, ever
+      return;
+    }
+    // Music requested before the unlock gesture (e.g. the main menu on page
+    // load) was only recorded -- start it now that we have a context.
+    const requested = this.currentMusicId;
+    if (requested) {
+      this.currentMusicId = null;
+      this.playMusic(requested);
     }
   }
 
@@ -122,19 +131,13 @@ class AudioManager {
     const def = SOUND_MANIFEST[id as SoundId];
     const buffer = def ? await this.loadBuffer(id) : null;
 
-    const prevSource = this.musicSource;
-    if (prevSource) {
-      try {
-        prevSource.stop(this.ctx.currentTime + fadeMs / 1000);
-      } catch {
-        /* already stopped */
-      }
-    }
+    // A newer playMusic/stopMusic call won the race while we were loading --
+    // it already handled the previous track, so don't touch anything.
+    if (this.currentMusicId !== id) return;
 
-    if (!buffer || this.currentMusicId !== id) {
-      this.musicSource = null;
-      return; // fails gracefully: no track playing, not an error
-    }
+    this.fadeOutCurrentMusic(fadeMs);
+
+    if (!buffer) return; // fails gracefully: no track playing, not an error
 
     const source = this.ctx.createBufferSource();
     source.buffer = buffer;
@@ -146,17 +149,31 @@ class AudioManager {
     gain.connect(this.musicGain);
     source.start(0);
     this.musicSource = source;
+    this.musicSourceGain = gain;
   }
 
   stopMusic(fadeMs = 500) {
     this.currentMusicId = null;
-    if (!this.musicSource || !this.ctx) return;
+    this.fadeOutCurrentMusic(fadeMs);
+  }
+
+  private fadeOutCurrentMusic(fadeMs: number) {
+    const source = this.musicSource;
+    const gain = this.musicSourceGain;
+    this.musicSource = null;
+    this.musicSourceGain = null;
+    if (!source || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    if (gain) {
+      gain.gain.cancelScheduledValues(now);
+      gain.gain.setValueAtTime(gain.gain.value, now);
+      gain.gain.linearRampToValueAtTime(0, now + fadeMs / 1000);
+    }
     try {
-      this.musicSource.stop(this.ctx.currentTime + fadeMs / 1000);
+      source.stop(now + fadeMs / 1000);
     } catch {
       /* already stopped */
     }
-    this.musicSource = null;
   }
 }
 

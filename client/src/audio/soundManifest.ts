@@ -72,11 +72,12 @@ export const SOUND_MANIFEST: Record<string, SoundDef> = {
   ui_close: sfx('ui_close.wav', { volume: 0.5 }),
 
   // --- Music beds ---
-  music_menu: music('menu_loop.ogg', { volume: 0.6 }),
+  music_menu: music('casting spells n shit.mp3', { volume: 0.6 }),
+  music_pause: music('casting spells n shit loop.mp3', { volume: 0.6 }),
   music_arena: music('arena_loop.ogg', { volume: 0.5 }),
   music_arena_intense: music('arena_intense_loop.ogg', { volume: 0.5 }), // optional adaptive layer
   music_victory: music('victory_sting.ogg', { loop: false, volume: 0.7 }),
-  music_death: music('death_sting.ogg', { loop: false, volume: 0.6 }),
+  music_death: music('death screen.mp3', { loop: false, volume: 0.6 }),
 };
 
 export type SoundId = keyof typeof SOUND_MANIFEST;

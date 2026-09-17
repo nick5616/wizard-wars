@@ -1,5 +1,5 @@
 export type WizardClass = 'fire' | 'ice' | 'dark' | 'sword' | 'druid' | 'crystalmancer';
-export type SpellType = 'projectile' | 'arc' | 'beam' | 'hitscan' | 'aoe' | 'domain' | 'direct' | 'passive' | 'mobility' | 'melee' | 'rune' | 'defensive';
+export type SpellType = 'projectile' | 'arc' | 'beam' | 'hitscan' | 'aoe' | 'domain' | 'direct' | 'passive' | 'mobility' | 'melee' | 'rune' | 'summon' | 'defensive';
 
 export interface Vec3 { x: number; y: number; z: number; }
 

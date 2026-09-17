@@ -472,6 +472,12 @@ export const DRUID_SPELLS = {
     statusEffect: 'stun', statusDuration: 500,
     color: '#5a9e3d', glowColor: '#8fd15a',
   }),
+  summon_airbud: def({
+    id: 'summon_airbud', name: 'Summon Airbud', school: 'druid', tier: 2, class: 'druid',
+    // Summons a dim little bot that hops toward enemies. Landing on someone kills them outright.
+    type: 'summon', damage: 9999, cooldown: 20.0, radius: 1.1, duration: 15000,
+    color: '#c89b5a', glowColor: '#8fd15a',
+  }),
   rune_seismic: def({
     id: 'rune_seismic', name: 'Seismic Rune', school: 'druid', tier: 11, class: 'druid',
     type: 'rune', damage: 150, cooldown: 15.0, radius: 3.5, armMs: 500, duration: 20000,

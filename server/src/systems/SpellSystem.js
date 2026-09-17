@@ -156,6 +156,7 @@ export class SpellSystem {
       case 'direct':     this._castDirect(player, spell, targetId, clientTimestamp); break;
       case 'mobility':   this._castSlotMobility(player, spell); break;
       case 'rune':       this._castRune(player, spell, aimDir); break;
+      case 'summon':     this._castAirbud(player, spell, aimDir); break;
       default: break;
     }
 
@@ -670,6 +671,105 @@ export class SpellSystem {
     });
   }
 
+  // ── Airbud (Druid summon) ─────────────────────────────────────────────────
+  // A dim little bot that hops toward the nearest enemy. It's not smart: it
+  // sometimes hops in a random direction, overshoots/undershoots, and pauses
+  // to think. Anyone (other than its owner) under it when it lands dies.
+
+  _castAirbud(player, spell, aimDir) {
+    const id = uuid();
+    const now = Date.now();
+    const position = { x: player.position.x + aimDir.x * 2.5, y: 0, z: player.position.z + aimDir.z * 2.5 };
+
+    this.room.effects.set(id, {
+      id,
+      type: 'airbud',
+      spellId: spell.id,
+      ownerId: player.id,
+      position,
+      hopFrom: { ...position },
+      hopTo: { ...position },
+      hopStart: now,
+      hopEnd: now,
+      nextHopAt: now + 700,
+      landed: true,
+      yaw: Math.atan2(aimDir.x, aimDir.z),
+      radius: spell.radius ?? 1.1,
+      damage: spell.damage,
+      startedAt: now,
+      createdAt: now,
+      expiresAt: now + (spell.duration ?? 15000),
+      active: true,
+    });
+  }
+
+  _tickAirbud(effect, now) {
+    // Mid-hop: nothing to do until it lands
+    if (effect.hopEnd > now) return;
+
+    // Just landed — squash anyone underneath
+    if (!effect.landed) {
+      effect.landed = true;
+      effect.position = { ...effect.hopTo };
+      for (const pid of this.room.playerIds) {
+        if (pid === effect.ownerId) continue;
+        const p = this.room.server.players.get(pid);
+        if (!p?.isAlive) continue;
+        const dx = p.position.x - effect.position.x;
+        const dz = p.position.z - effect.position.z;
+        if (dx * dx + dz * dz <= effect.radius * effect.radius && p.position.y < 2.5) {
+          this.room.applyDamage(pid, effect.damage, effect.ownerId, effect.spellId);
+        }
+      }
+    }
+
+    if (now < effect.nextHopAt) return;
+
+    // Pick a direction: usually the nearest enemy, sometimes whatever
+    let target = null;
+    let bestD2 = Infinity;
+    for (const pid of this.room.playerIds) {
+      if (pid === effect.ownerId) continue;
+      const p = this.room.server.players.get(pid);
+      if (!p?.isAlive) continue;
+      const dx = p.position.x - effect.position.x;
+      const dz = p.position.z - effect.position.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < bestD2) { bestD2 = d2; target = p; }
+    }
+
+    let angle;
+    let dist;
+    if (!target || Math.random() < 0.25) {
+      angle = Math.random() * Math.PI * 2; // got distracted
+      dist = 2 + Math.random() * 3;
+    } else {
+      const dx = target.position.x - effect.position.x;
+      const dz = target.position.z - effect.position.z;
+      angle = Math.atan2(dx, dz) + (Math.random() - 0.5) * 0.9; // sloppy aim
+      dist = Math.min(Math.sqrt(bestD2) * (0.7 + Math.random() * 0.6), 6); // bad at judging distance
+    }
+
+    const to = {
+      x: effect.position.x + Math.sin(angle) * dist,
+      y: 0,
+      z: effect.position.z + Math.cos(angle) * dist,
+    };
+    const r = Math.hypot(to.x, to.z);
+    const maxR = ARENA_RADIUS - 1.5;
+    if (r > maxR) { to.x *= maxR / r; to.z *= maxR / r; }
+
+    const hopMs = 550;
+    effect.hopFrom = { ...effect.position };
+    effect.hopTo = to;
+    effect.hopStart = now;
+    effect.hopEnd = now + hopMs;
+    effect.yaw = angle;
+    effect.landed = false;
+    // Occasionally stops to sniff around
+    effect.nextHopAt = effect.hopEnd + (Math.random() < 0.2 ? 1400 : 350 + Math.random() * 400);
+  }
+
   // ── Barriers (Ice Wall, Rock Wall) ──────────────────────────────────────
 
   _createBarrier(player, spell, aimDir) {
@@ -1092,6 +1192,10 @@ export class SpellSystem {
           // client-side, instead of vanishing the instant it deals damage.
           effect.expiresAt = now + 400;
         }
+      }
+
+      if (effect.type === 'airbud') {
+        this._tickAirbud(effect, now);
       }
 
       if (effect.type === 'amaterasu') {
