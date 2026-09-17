@@ -63,6 +63,7 @@ const CAST_PROFILES: Record<Exclude<SpellType, 'mobility' | 'passive' | 'defensi
   domain:     { windup: 1150, cast: 480, recover: 550, pause: 900, impactAt: 1150 + 480, visual: 'dome', upPose: -1.35, downPose: 0.95, yawSweep: 0.9 },
   melee:      { windup: 190, cast: 190, recover: 300, pause: 620, impactAt: 190 + 150, visual: 'lunge', upPose: -0.5, downPose: 0.5, yawSweep: 1.3 },
   rune:       { windup: 420, cast: 260, recover: 320, pause: 950, impactAt: 420 + 260 + 500, visual: 'rune', upPose: -0.6, downPose: 1.5, yawSweep: 0 },
+  summon:     { windup: 600, cast: 300, recover: 380, pause: 900, impactAt: 600 + 300 + 600, visual: 'rune', upPose: -1.1, downPose: 1.2, yawSweep: 0 },
 };
 
 function cycleDuration(p: CastProfile): number {

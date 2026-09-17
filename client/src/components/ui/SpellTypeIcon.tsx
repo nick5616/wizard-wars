@@ -29,6 +29,7 @@ const LABELS: Record<IconKind, string> = {
   passive: 'Passive — always-on effect, not cast',
   rune: 'Rune — placed on the ground, detonates on the first enemy to step in it',
   defensive: 'Defensive — Q. One per class: a shield, barrier, or counter.',
+  summon: 'Summon — calls a minion that hunts enemies on its own',
 };
 
 interface Props {
@@ -147,6 +148,15 @@ function glyph(kind: IconKind) {
     case 'defensive': // shield
       return (
         <path d="M12 2.5l8 3.2v6.3c0 5-3.4 8.4-8 9.5-4.6-1.1-8-4.5-8-9.5V5.7z" />
+      );
+    case 'summon': // little bot -- head with eyes, on a summoning circle
+      return (
+        <>
+          <rect x="6.5" y="4" width="11" height="9" rx="2.5" />
+          <circle cx="10" cy="8.5" r="1.1" fill="currentColor" stroke="none" />
+          <circle cx="14" cy="8.5" r="1.1" fill="currentColor" stroke="none" />
+          <ellipse cx="12" cy="19" rx="8.5" ry="2.8" />
+        </>
       );
     case 'passive':
     default: // star
