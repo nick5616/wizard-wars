@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react';
 import { useNetworkStore } from '../../stores/networkStore';
+import { netDebug } from '../../networking/netDebug';
 import { BODY_FONT } from '../../styles/fonts';
 
 /**
@@ -16,7 +18,17 @@ function statColor(value: number, warn: number, bad: number) {
 }
 
 export function NetworkStats() {
-  const { rtt, jitter } = useNetworkStore();
+  const { rtt, jitter, connected } = useNetworkStore();
+
+  // Dev-only prediction/interpolation health (see networking/netDebug.ts);
+  // netDebug.live isn't reactive, so poll it at a readable rate.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!netDebug.enabled) return;
+    const id = setInterval(() => setTick((t) => t + 1), 500);
+    return () => clearInterval(id);
+  }, []);
+  const live = netDebug.live;
 
   return (
     <div style={{
@@ -40,6 +52,13 @@ export function NetworkStats() {
       <span style={{ color: statColor(jitter, JITTER_WARN, JITTER_BAD) }}>
         JITTER {Math.round(jitter)}ms
       </span>
+      {!connected && <span style={{ color: '#ff5555' }}>RECONNECTING</span>}
+      {netDebug.enabled && (
+        <span style={{ color: statColor(live.corrP95 * 100, 2, 10) }}>
+          CORR {(live.corrMean * 100).toFixed(1)}/{(live.corrP95 * 100).toFixed(1)}cm {live.corrPerSec.toFixed(1)}/s
+          {' '}UNACK {live.unacked} INTERP {Math.round(live.interpDelay)}ms X{live.extrapPct.toFixed(0)}% S{live.starvedPct.toFixed(0)}%
+        </span>
+      )}
     </div>
   );
 }

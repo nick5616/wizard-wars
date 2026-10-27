@@ -15,57 +15,65 @@ import type { CastAnim } from '../../hooks/useCastAnimation';
 const REST_PITCH = 0.35;
 
 /** [pitch, yaw, forwardPush] local rotation/offset for the arm group, by cast kind + elapsed time. */
+// computePose runs per wizard per frame; hand back one shared tuple instead of
+// allocating a fresh array each call (callers destructure it immediately).
+const POSE: [number, number, number] = [0, 0, 0];
+function pose(pitch: number, yaw: number, push: number): [number, number, number] {
+  POSE[0] = pitch; POSE[1] = yaw; POSE[2] = push;
+  return POSE;
+}
+
 function computePose(cast: CastAnim | null, now: number): [number, number, number] {
-  if (!cast) return [REST_PITCH, 0, 0];
+  if (!cast) return pose(REST_PITCH, 0, 0);
   const t = (now - cast.startedAt) / 1000;
 
   switch (cast.kind) {
     case 'melee': {
       const dur = 0.25;
-      if (t > dur) return [REST_PITCH, 0, 0];
+      if (t > dur) return pose(REST_PITCH, 0, 0);
       const swing = Math.sin((t / dur) * Math.PI);
-      return [REST_PITCH - swing * 1.15, (t / dur < 0.5 ? -1 : 1) * swing * 0.55, swing * 0.22];
+      return pose(REST_PITCH - swing * 1.15, (t / dur < 0.5 ? -1 : 1) * swing * 0.55, swing * 0.22);
     }
     case 'hitscan':
     case 'direct': {
       const dur = 0.18;
-      if (t > dur) return [REST_PITCH, 0, 0];
+      if (t > dur) return pose(REST_PITCH, 0, 0);
       const snap = Math.sin((t / dur) * Math.PI);
-      return [REST_PITCH - snap * 0.55, 0, snap * 0.28];
+      return pose(REST_PITCH - snap * 0.55, 0, snap * 0.28);
     }
     case 'projectile': {
       const dur = 0.22;
-      if (t > dur) return [REST_PITCH, 0, 0];
+      if (t > dur) return pose(REST_PITCH, 0, 0);
       const p = t / dur;
       const pull = p < 0.35 ? -(p / 0.35) : ((p - 0.35) / 0.65);
-      return [REST_PITCH - Math.max(-0.3, pull) * 0.7, 0, Math.max(0, pull) * 0.35];
+      return pose(REST_PITCH - Math.max(-0.3, pull) * 0.7, 0, Math.max(0, pull) * 0.35);
     }
     case 'beam': {
       const rampDur = 0.15;
       const held = Math.min(1, t / rampDur);
-      return [REST_PITCH - held * 0.55, Math.sin(t * 3) * 0.05, held * 0.2];
+      return pose(REST_PITCH - held * 0.55, Math.sin(t * 3) * 0.05, held * 0.2);
     }
     case 'aoe': {
       const dur = 0.4;
-      if (t > dur) return [REST_PITCH, 0, 0];
+      if (t > dur) return pose(REST_PITCH, 0, 0);
       const p = t / dur;
       const raise = p < 0.4 ? p / 0.4 : 1 - (p - 0.4) / 0.6;
-      return [REST_PITCH - raise * 1.5, 0, raise * 0.2];
+      return pose(REST_PITCH - raise * 1.5, 0, raise * 0.2);
     }
     case 'domain': {
       const dur = 0.9;
-      if (t > dur) return [REST_PITCH, 0, 0];
+      if (t > dur) return pose(REST_PITCH, 0, 0);
       const p = Math.min(1, t / dur);
-      return [REST_PITCH - p * 1.8, Math.sin(t * 4) * 0.15, 0];
+      return pose(REST_PITCH - p * 1.8, Math.sin(t * 4) * 0.15, 0);
     }
     case 'mobility': {
       const dur = 0.25;
-      if (t > dur) return [REST_PITCH, 0, 0];
+      if (t > dur) return pose(REST_PITCH, 0, 0);
       const sweep = Math.sin((t / dur) * Math.PI);
-      return [REST_PITCH, sweep * 1.1, 0];
+      return pose(REST_PITCH, sweep * 1.1, 0);
     }
     default:
-      return [REST_PITCH, 0, 0];
+      return pose(REST_PITCH, 0, 0);
   }
 }
 

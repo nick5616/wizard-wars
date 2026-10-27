@@ -10,7 +10,11 @@ import { FrameStats } from './FrameStats';
 import type { WebSocketClient } from '../../networking/WebSocketClient';
 
 export function HUD({ ws }: { ws: WebSocketClient }) {
-  const { local, phase } = useGameStore();
+  // Narrow selectors: whole-store subscription re-rendered the HUD (and
+  // re-created every child element) on every store write, 20Hz tick syncs and
+  // the 60Hz cooldown ticker included.
+  const phase = useGameStore((s) => s.phase);
+  const kills = useGameStore((s) => s.local.kills);
 
   if (phase !== 'playing') return null;
 
@@ -36,7 +40,7 @@ export function HUD({ ws }: { ws: WebSocketClient }) {
         zIndex: 100,
         letterSpacing: 1,
       }}>
-        <div>K {local.kills}</div>
+        <div>K {kills}</div>
       </div>
 
       {/* Fire Solar Flare: brief blind flash when hit by a caster with the passive */}

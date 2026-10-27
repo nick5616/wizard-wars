@@ -24,6 +24,9 @@ const HAT_CONE_RADIUS = 0.28;
 const HAT_CONE_HEIGHT = 0.5;
 const HAT_BASE_LOCAL_Y = 1.95;
 
+// Faint self-glow replacing the old per-player <pointLight> -- see RemotePlayer.tsx.
+const BODY_GLOW = 0.14;
+
 const CLASS_COLORS: Record<string, string> = {
   fire: '#ff4500', ice: '#a0d8ff', dark: '#6600cc', sword: '#c8c8c8', druid: '#5a9e3d', crystalmancer: '#8fd4ff', default: '#888888',
 };
@@ -75,7 +78,7 @@ export function LocalPlayerModel() {
     <group ref={groupRef}>
       <mesh position={[0, 0.9, 0]} castShadow>
         <capsuleGeometry args={[0.35, 1.0, 4, 8]} />
-        <meshStandardMaterial color={color} roughness={0.7} metalness={0.1} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={BODY_GLOW} roughness={0.7} metalness={0.1} />
       </mesh>
 
       <mesh position={[0, 1.75, 0]} castShadow>
@@ -89,8 +92,6 @@ export function LocalPlayerModel() {
           <meshStandardMaterial color={hatColor} roughness={0.45} metalness={0.2} />
         </mesh>
       </group>
-
-      <pointLight position={[0, 1.5, 0]} intensity={0.5} distance={3} color={color} />
 
       {defensiveActive && defensiveGlow && (
         <mesh position={[0, 1.0, 0]}>

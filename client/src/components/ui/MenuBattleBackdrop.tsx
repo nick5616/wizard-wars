@@ -42,5 +42,5 @@ export function MenuBattleBackdrop() {
   const myClass = ALL_CLASSES[idx % ALL_CLASSES.length];
   const spell = SIGNATURE_SPELL[myClass];
 
-  return <BattleScene myClass={myClass} hoveredSpell={spell} idleGemColor="#9a8cff" />;
+  return <BattleScene myClass={myClass} hoveredSpell={spell} idleGemColor="#9a8cff" maxFps={30} />;
 }

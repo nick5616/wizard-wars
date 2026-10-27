@@ -16,7 +16,25 @@ import { ChainLightningArc } from './ChainLightningArc';
 import { RuneSpell } from './RuneSpell';
 import { GemPlopSpell } from './GemPlopSpell';
 import { AirbudSpell } from './AirbudSpell';
-import { Suspense } from 'react';
+import { Suspense, memo } from 'react';
+import { entityEqual } from '../../utils/propsEqual';
+
+// applyTick replaces every entity object on each 20Hz sync, so without value
+// equality all spell components re-rendered (and re-diffed their meshes) every
+// sync even when the effect hadn't changed. Static effects now skip it.
+const Projectile = memo(ProjectileSpell, entityEqual('projectile'));
+const Hitscan = memo(HitscanFlash, entityEqual('effect'));
+const Beam = memo(BeamSpell, entityEqual('effect'));
+const Melee = memo(MeleeSwing, entityEqual('effect'));
+const Aoe = memo(AoeSpell, entityEqual('effect'));
+const Lightning = memo(LightningStrikeSpell, entityEqual('effect'));
+const Amaterasu = memo(AmaterasuSpell, entityEqual('effect'));
+const Chain = memo(ChainLightningArc, entityEqual('effect'));
+const Rune = memo(RuneSpell, entityEqual('effect'));
+const Airbud = memo(AirbudSpell, entityEqual('effect'));
+const GemPlop = memo(GemPlopSpell, entityEqual('effect'));
+const Domain = memo(DomainExpansion, entityEqual('domain'));
+const Barrier = memo(BarrierRenderer, entityEqual('barrier'));
 
 export function SpellRenderer() {
   const projectiles = useGameStore((s) => s.projectiles);
@@ -31,7 +49,7 @@ export function SpellRenderer() {
       {/* Projectiles */}
       {Object.values(projectiles).map((proj) =>
         proj.active && now < proj.expiresAt ? (
-          <ProjectileSpell key={proj.id} projectile={proj} />
+          <Projectile key={proj.id} projectile={proj} />
         ) : null
       )}
 
@@ -39,37 +57,37 @@ export function SpellRenderer() {
       {Object.values(effects).map((effect) => {
         if (!effect.active || now > effect.expiresAt) return null;
         if (effect.type === 'hitscan_flash') {
-          return <HitscanFlash key={effect.id} effect={effect} />;
+          return <Hitscan key={effect.id} effect={effect} />;
         }
         if (effect.type === 'beam') {
-          return <BeamSpell key={effect.id} effect={effect} />;
+          return <Beam key={effect.id} effect={effect} />;
         }
         if (effect.type === 'melee_swing') {
-          return <MeleeSwing key={effect.id} effect={effect} />;
+          return <Melee key={effect.id} effect={effect} />;
         }
         if (effect.type === 'aoe') {
           return effect.spellId === 'lightning_strike'
-            ? <LightningStrikeSpell key={effect.id} effect={effect} />
-            : <AoeSpell key={effect.id} effect={effect} />;
+            ? <Lightning key={effect.id} effect={effect} />
+            : <Aoe key={effect.id} effect={effect} />;
         }
         if (effect.type === 'amaterasu') {
-          return <AmaterasuSpell key={effect.id} effect={effect} />;
+          return <Amaterasu key={effect.id} effect={effect} />;
         }
         if (effect.type === 'chain_lightning') {
-          return <ChainLightningArc key={effect.id} effect={effect} />;
+          return <Chain key={effect.id} effect={effect} />;
         }
         if (effect.type === 'rune') {
-          return <RuneSpell key={effect.id} effect={effect} />;
+          return <Rune key={effect.id} effect={effect} />;
         }
         if (effect.type === 'airbud') {
           return (
             <Suspense key={effect.id} fallback={null}>
-              <AirbudSpell effect={effect} />
+              <Airbud effect={effect} />
             </Suspense>
           );
         }
         if (effect.type === 'gem_decoy') {
-          return <GemPlopSpell key={effect.id} effect={effect} />;
+          return <GemPlop key={effect.id} effect={effect} />;
         }
         return null;
       })}
@@ -77,13 +95,13 @@ export function SpellRenderer() {
       {/* Domain expansions */}
       {Object.values(domains).map((domain) =>
         domain.active && now < domain.expiresAt ? (
-          <DomainExpansion key={domain.id} domain={domain} />
+          <Domain key={domain.id} domain={domain} />
         ) : null
       )}
 
       {/* Barriers (Ice Wall, Rock Wall) */}
       {Object.values(barriers).map((barrier) =>
-        barrier.active ? <BarrierRenderer key={barrier.id} barrier={barrier} /> : null
+        barrier.active ? <Barrier key={barrier.id} barrier={barrier} /> : null
       )}
     </>
   );

@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useGameStore } from '../../stores/gameStore';
 import { C2S } from 'shared/events';
 import { rankForLevel } from 'shared/leveling';
@@ -30,6 +30,7 @@ export function DeathScreen({ ws }: DeathScreenProps) {
   const lastDeath = useGameStore((s) => s.lastDeath);
   const matchActive = useGameStore((s) => s.matchActive);
   const rank = rankForLevel(local.level);
+  const shownAtRef = useRef(Date.now());
 
   const branchGroup = local.class ? Object.keys(local.divergedBranch)[0] : undefined;
   const pair = local.class && branchGroup ? getForkPair(local.class, branchGroup) : null;
@@ -50,7 +51,14 @@ export function DeathScreen({ ws }: DeathScreenProps) {
     // arrives.
     if (matchActive) return;
 
+    // The key that was held when the player died (WASD mid-run, 1-4 mid-spell-swap)
+    // is still down and auto-repeating -- without a short grace period that repeat
+    // (or a mashed spell-slot digit, which also doubles as "respawn as class N")
+    // dismissed the death screen the instant it appeared, sometimes as the wrong class.
+    const armedAt = Date.now() + 600;
+
     function onKeyDown(e: KeyboardEvent) {
+      if (e.repeat || Date.now() < armedAt) return;
       // Leave Escape/Tab alone -- App.tsx uses them to open the pause/skill menus
       // even while dead, and those shouldn't also trigger a respawn.
       if (e.code === 'Escape' || e.code === 'Tab') return;
@@ -87,7 +95,7 @@ export function DeathScreen({ ws }: DeathScreenProps) {
         zIndex: 200,
         fontFamily: BODY_FONT,
       }}
-      onClick={matchActive ? undefined : () => ws.send(C2S.RESPAWN, {})}
+      onClick={matchActive ? undefined : () => { if (Date.now() - shownAtRef.current > 600) ws.send(C2S.RESPAWN, {}); }}
     >
       <div style={{ fontFamily: TITLE_FONT, fontSize: 40, fontWeight: 900, color: '#cc4444', letterSpacing: 6 }}>DEFEATED</div>
       <div style={{ fontSize: 14, color: '#999', letterSpacing: 2, textTransform: 'uppercase' }}>

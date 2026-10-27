@@ -100,7 +100,10 @@ export function MatchEndScreen({ ws }: MatchEndScreenProps) {
         position: 'fixed',
         inset: 0,
         display: 'flex',
-        alignItems: 'center',
+        // flex-start + `margin: auto` on the child (not align-items: center): the standings
+        // list can be taller than the viewport (12-player modes), and centring an overflowing
+        // flex item clips its top (the VICTORY/DEFEATED headline) out of scroll reach.
+        alignItems: 'flex-start',
         justifyContent: 'center',
         background: 'rgba(0,0,0,0.88)',
         zIndex: 400,
@@ -109,7 +112,7 @@ export function MatchEndScreen({ ws }: MatchEndScreenProps) {
         padding: '40px 0',
       }}
     >
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 28, width: 'min(640px, 92vw)' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 28, width: 'min(640px, 92vw)', margin: 'auto' }}>
         <div style={{
           fontFamily: TITLE_FONT,
           fontWeight: 900,

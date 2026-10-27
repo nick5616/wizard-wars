@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { shallow } from 'zustand/shallow';
 import { useGameStore } from '../../stores/gameStore';
 import { C2S } from 'shared/events';
 import type { WebSocketClient } from '../../networking/WebSocketClient';
@@ -35,15 +36,19 @@ const CLASS_COLORS: Record<WizardClass, string> = {
  * longer its own fullscreen overlay, so it has no close/click-outside chrome
  * of its own; the pause menu's ESC button and Escape/Tab keys own that. */
 export function SkillTreeTab({ ws }: SkillTreeTabProps) {
-  const { local, addUnlockedNode, debugMode } = useGameStore();
-  const wizardClass = local.class;
+  const wizardClass = useGameStore((s) => s.local.class);
+  // Arrays arrive as fresh objects every tick sync, so compare element-wise.
+  const unlockedNodes = useGameStore((s) => s.local.unlockedNodes, shallow);
+  const skillPoints = useGameStore((s) => s.local.skillPoints);
+  const addUnlockedNode = useGameStore((s) => s.addUnlockedNode);
+  const debugMode = useGameStore((s) => s.debugMode);
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
 
   if (!wizardClass) return null;
 
   const tree = SKILL_TREES[wizardClass];
   const color = CLASS_COLORS[wizardClass];
-  const unlocked = new Set(local.unlockedNodes);
+  const unlocked = new Set(unlockedNodes);
 
   const maxTier = Math.max(...tree.map(n => n.tier));
   const TIER_H = 48;
@@ -96,7 +101,7 @@ export function SkillTreeTab({ ws }: SkillTreeTabProps) {
               {wizardClass} — Skill Tree
             </div>
             <div style={{ color: '#aaa', fontSize: 11, letterSpacing: 2 }}>
-              {local.skillPoints} point{local.skillPoints !== 1 ? 's' : ''} available
+              {skillPoints} point{skillPoints !== 1 ? 's' : ''} available
               {debugMode && <span style={{ color: '#ff8844', marginLeft: 8 }}>DEBUG</span>}
             </div>
           </div>

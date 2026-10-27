@@ -70,14 +70,32 @@ export function useKeyboardControls() {
     if (key) setMovement(prev => prev[key] ? { ...prev, [key]: false } : prev);
   }, []);
 
+  // A keyup that lands while the window is blurred (alt-tab, devtools, the
+  // OS stealing focus, pointer lock being dropped by the browser) is never
+  // delivered, so the key would stay "held" forever and the wizard would
+  // keep running until the player tapped that key again. Release everything
+  // whenever focus is lost.
+  const releaseAll = useCallback(() => {
+    setMovement(prev => (
+      Object.values(prev).some(Boolean)
+        ? { forward: false, backward: false, left: false, right: false, jumping: false, mobility: false, defensive: false, melee: false }
+        : prev
+    ));
+  }, []);
+
   useEffect(() => {
+    const onVisibility = () => { if (document.hidden) releaseAll(); };
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', releaseAll);
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', releaseAll);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [onKeyDown, onKeyUp]);
+  }, [onKeyDown, onKeyUp, releaseAll]);
 
   return { movement };
 }

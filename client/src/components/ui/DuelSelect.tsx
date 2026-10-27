@@ -37,14 +37,17 @@ export function DuelSelect({ onPick, onBack }: DuelSelectProps) {
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'center',
-      justifyContent: 'center',
+      // No `justifyContent: 'center'` here: with 18 cards the content is taller than any
+      // viewport, and centring an overflowing flex column clips the top (title + the whole
+      // first row) out of reach of the scrollbar. Auto margins on the first/last child
+      // centre when it fits and collapse to a normal scroll when it doesn't.
       gap: 28,
       zIndex: 300,
       fontFamily: BODY_FONT,
       padding: '40px 0',
       overflowY: 'auto',
     }}>
-      <div style={{ textAlign: 'center' }}>
+      <div style={{ textAlign: 'center', marginTop: 'auto' }}>
         <div style={{ fontFamily: TITLE_FONT, fontWeight: 700, fontSize: 36, letterSpacing: 3, color: '#e8dcb8' }}>
           Choose Your Rival
         </div>
@@ -110,6 +113,7 @@ export function DuelSelect({ onPick, onBack }: DuelSelectProps) {
           textTransform: 'uppercase',
           cursor: 'pointer',
           fontFamily: BODY_FONT,
+          marginBottom: 'auto',
         }}
       >
         ← Back

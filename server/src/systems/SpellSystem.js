@@ -3,19 +3,58 @@ import { getSpell, MOBILITY_SPELL, DEFENSIVE_SPELL, BASIC_ATTACK, MELEE_ATTACK }
 import { S2C } from 'shared/events';
 import { DOMAIN_CONFIGS, PROJECTILE_GRAVITY } from 'shared/gameConfig';
 import {
-  MAX_CONCURRENT_DOMAINS, ARENA_RADIUS, PLAYER_HEIGHT, CAST_MAX_RANGE, BASE_MOVE_SPEED,
+  INTERPOLATION_DELAY, MAX_CONCURRENT_DOMAINS, ARENA_RADIUS, PLAYER_HEIGHT, CAST_MAX_RANGE, BASE_MOVE_SPEED,
   MOVE_CURVE_SPEED_CAP, MAX_CURVE_DEG, BASE_ARC_ANGLE_DEG, ARC_ANGLE_SWING_DEG, MIN_ARC_ANGLE_DEG, MAX_ARC_ANGLE_DEG,
 } from 'shared/constants';
 import { hatCenterY, hatRadius } from 'shared/leveling';
 import { terrainRaycastBlocked, rayIntersectsCylinder } from 'shared/mapLayout';
+
+// Per-room ceilings on world-state entities. Cooldowns normally bound these,
+// but debug mode has none, and any spell with a tiny cooldown stacks hundreds
+// of live entries (each of which is simulated AND broadcast to everyone every
+// tick). Past the cap the OLDEST entries are dropped.
+const MAX_PROJECTILES_PER_ROOM = 600;
+const MAX_EFFECTS_PER_ROOM = 1200;
+const MAX_BARRIERS_PER_ROOM = 120;
+
+function trimOldest(map, max) {
+  let excess = map.size - max;
+  if (excess <= 0) return;
+  for (const key of map.keys()) {
+    map.delete(key);
+    if (--excess <= 0) break;
+  }
+}
 
 export class SpellSystem {
   constructor(room) {
     this.room = room;
   }
 
+  /**
+   * Server time the shooter's crosshair was actually looking at. The client's
+   * interpolation delay is adaptive (EntityInterpolation, ~32-260ms), so it
+   * reports the exact server time it was rendering remotes at as `viewTs` on
+   * each input (kept as player.lastViewTs) -- that's the moment to rewind to.
+   * Clients that don't send it fall back to `ts` (the client's serverNow() at
+   * send) minus the nominal INTERPOLATION_DELAY. (This used to subtract
+   * `player.rtt / 2`, but nothing ever updated rtt from its constructor default
+   * of 100, so every shot was rewound a fixed 50ms regardless of the shooter's
+   * real connection.) Bots run on server time with no latency; LagCompensation
+   * additionally clamps the result to MAX_REWIND_MS, which bounds what a
+   * client lying about viewTs can gain.
+   */
+  _lagCompTime(player, clientTimestamp) {
+    if (player.isBot) return Date.now();
+    if (Number.isFinite(player.lastViewTs)) return Math.min(player.lastViewTs, Date.now());
+    if (!Number.isFinite(clientTimestamp)) return Date.now();
+    return clientTimestamp - INTERPOLATION_DELAY;
+  }
+
   handleCastRequest(player, castInput, clientTimestamp) {
+    if (!castInput || typeof castInput !== 'object') return;
     const { spellId, slotIndex, aimDir, targetId } = castInput;
+    if (typeof spellId !== 'string' || !Number.isInteger(slotIndex) || !aimDir) return;
 
     // Validate spell is equipped
     const equipped = player.equippedSpells[slotIndex];
@@ -66,8 +105,8 @@ export class SpellSystem {
     // without this they could land Amaterasu etc. on an enemy anywhere on
     // the map the instant it left cooldown.
     if (spell.requiresTarget) {
-      const target = this.room.server.players.get(targetId);
-      if (!target || !target.isAlive) return this._deny(player, spellId, 'invalid_target');
+      const target = typeof targetId === 'string' && targetId !== player.id ? this.room.server.players.get(targetId) : null;
+      if (!target || !target.isAlive || !this.room.playerIds.has(targetId)) return this._deny(player, spellId, 'invalid_target');
       const dx = target.position.x - player.position.x;
       const dy = target.position.y - player.position.y;
       const dz = target.position.z - player.position.z;
@@ -408,7 +447,7 @@ export class SpellSystem {
 
   _castHitscan(player, spell, aimDir, clientTimestamp, { skipFlashOnHit = false } = {}) {
     // Determine compensation timestamp
-    const compTimestamp = clientTimestamp - (player.rtt / 2);
+    const compTimestamp = this._lagCompTime(player, clientTimestamp);
 
     const result = this.room.lagCompensation.rayCast(
       { ...player.position }, // position.y is eye level
@@ -861,6 +900,10 @@ export class SpellSystem {
   // ── Domain ────────────────────────────────────────────────────────────────
 
   _castDomain(player, spell) {
+    // Re-check at resolve time: a windup domain only claims the slot when it
+    // lands, so two casters could both pass handleCastRequest's check while
+    // the field was empty and then both resolve -- two simultaneous domains.
+    if (this.room.getActiveDomain()) return;
     const domainId = uuid();
     const config = DOMAIN_CONFIGS[spell.id];
     const now = Date.now();
@@ -987,6 +1030,7 @@ export class SpellSystem {
   // ── Tick projectiles ──────────────────────────────────────────────────────
 
   tickProjectiles(dt, now) {
+    trimOldest(this.room.projectiles, MAX_PROJECTILES_PER_ROOM);
     const toRemove = [];
 
     for (const [id, proj] of this.room.projectiles) {
@@ -1109,7 +1153,8 @@ export class SpellSystem {
 
         // Lifesteal
         const owner = this.room.server.players.get(proj.ownerId);
-        if (owner && projSpell?.lifesteal) {
+        // isAlive: a projectile can outlive its caster; lifesteal must not heal a corpse (health > 0 while isAlive is false)
+        if (owner?.isAlive && projSpell?.lifesteal) {
           owner.health = Math.min(owner.maxHealth, owner.health + Math.round(dmg * projSpell.lifesteal));
         }
 
@@ -1152,6 +1197,8 @@ export class SpellSystem {
   // ── Tick effects (AoE, beams, Amaterasu) ─────────────────────────────────
 
   tickEffects(dt, now) {
+    trimOldest(this.room.effects, MAX_EFFECTS_PER_ROOM);
+    trimOldest(this.room.barriers, MAX_BARRIERS_PER_ROOM);
     const toRemove = [];
 
     for (const [id, effect] of this.room.effects) {
@@ -1422,7 +1469,7 @@ export class SpellSystem {
     // Blood Nova and similar: heal the caster for a share of the total damage dealt.
     if (effect.lifesteal && totalDealt > 0) {
       const owner = this.room.server.players.get(effect.ownerId);
-      if (owner) owner.health = Math.min(owner.maxHealth, owner.health + Math.round(totalDealt * effect.lifesteal));
+      if (owner?.isAlive) owner.health = Math.min(owner.maxHealth, owner.health + Math.round(totalDealt * effect.lifesteal));
     }
   }
 
@@ -1446,7 +1493,9 @@ export class SpellSystem {
 
   _resolveBeam(effect, now, dt) {
     const owner = this.room.server.players.get(effect.ownerId);
-    if (!owner) return;
+    // A beam is channelled by its caster: when they die or leave it ends, instead of
+    // sweeping on (and damaging people) from a corpse's last look direction.
+    if (!owner || !owner.isAlive) { effect.active = false; return; }
 
     // Beams track the caster's current look direction every tick instead of
     // the aim direction frozen at cast time — previously a beam fired at one
@@ -1492,7 +1541,7 @@ export class SpellSystem {
       const tickDmg = Math.round(effect.damage * dt);
       const actual = this.room.applyDamage(pid, tickDmg, effect.ownerId, effect.spellId);
 
-      if (effect.lifesteal && owner) {
+      if (effect.lifesteal && owner?.isAlive) {
         owner.health = Math.min(owner.maxHealth, owner.health + Math.round(actual * effect.lifesteal));
       }
       if (effect.statusEffect) {

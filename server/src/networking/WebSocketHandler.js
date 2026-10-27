@@ -5,7 +5,7 @@ import { v4 as uuid } from 'uuid';
 import { C2S, S2C } from 'shared/events';
 import { getNode, canUnlockNode } from 'shared/skillTrees';
 import { CLASSES } from 'shared/constants';
-import { MAX_SPELL_SLOTS, ALL_SPELLS } from 'shared/spells';
+import { MAX_SPELL_SLOTS, ALL_SPELLS, getSpell, isEquippableSpell } from 'shared/spells';
 import { GAME_MODES } from 'shared/gameModes';
 import { getDuelOpponent } from 'shared/duelOpponents';
 
@@ -15,6 +15,18 @@ const CARD_BANK_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '../../../client/src/data/cardRecipeBank.json',
 );
+
+// Reserved prefixes: rooms the server itself creates (see _handleJoinRoom /
+// _handleStartMatch). A client-supplied roomId must never alias one -- joining
+// `experiment-<someoneElsesId>` dropped you into another player's private,
+// god-mode sandbox.
+const RESERVED_ROOM_PREFIXES = ['experiment-', 'match-'];
+const ROOM_ID_RE = /^[A-Za-z0-9_-]{1,32}$/;
+
+/** Usernames arrive as arbitrary JSON; only a string is a name (calling .slice on anything else threw mid-handler). */
+const cleanName = (v) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, 20) : null);
+// Ceiling for C2S.SPAWN_BOTS (one of each class per request) in any single room.
+const MAX_PRACTICE_BOTS = 12;
 
 export class WebSocketHandler {
   constructor(server) {
@@ -52,7 +64,9 @@ export class WebSocketHandler {
 
   _handleJoinRoom(player, msg) {
     const isExperiment = !!(msg.experiment && player.isLocalConnection);
-    const targetRoomId = isExperiment ? `experiment-${player.id}` : (msg.roomId ?? 'lobby');
+    let requested = msg.roomId ?? 'lobby';
+    if (typeof requested !== 'string' || !ROOM_ID_RE.test(requested) || RESERVED_ROOM_PREFIXES.some((p) => requested.startsWith(p))) requested = 'lobby';
+    const targetRoomId = isExperiment ? `experiment-${player.id}` : requested;
 
     // Re-opening the room you're already in (e.g. reopening the Experiment
     // Lab panel after closing it) must be a no-op: leaving-then-rejoining
@@ -60,7 +74,7 @@ export class WebSocketHandler {
     // only players left at that instant are bots, tear the room (and every
     // spawned bot) down before the rejoin below could recreate it.
     if (player.roomId === targetRoomId) {
-      if (msg.username) player.username = msg.username.slice(0, 20);
+      if (cleanName(msg.username)) player.username = cleanName(msg.username);
       if (isExperiment) player.isGodMode = true;
       return;
     }
@@ -74,17 +88,18 @@ export class WebSocketHandler {
     // the client hides the entry point off-localhost, but this check is what
     // actually matters (see GameServer.onConnection / isLoopbackAddress).
     if (isExperiment) {
-      const room = this.server.getOrCreateRoom(targetRoomId, { respawnEnabled: true });
-      if (msg.username) player.username = msg.username.slice(0, 20);
-      player.isGodMode = true;
+      const room = this.server.getOrCreateRoom(targetRoomId, { respawnEnabled: true }) ?? this.server.getOrCreateRoom('lobby');
+      if (cleanName(msg.username)) player.username = cleanName(msg.username);
+      player.isGodMode = room.id === targetRoomId;
       room.addPlayer(player);
       return;
     }
 
     player.isGodMode = false;
-    const room = this.server.getOrCreateRoom(targetRoomId);
+    // At the room cap a new named room can't be created: fall back to the lobby (always exists).
+    const room = this.server.getOrCreateRoom(targetRoomId) ?? this.server.getOrCreateRoom('lobby');
 
-    if (msg.username) player.username = msg.username.slice(0, 20);
+    if (cleanName(msg.username)) player.username = cleanName(msg.username);
     room.addPlayer(player);
 
     // Resumed session (class/progress restored from Redis on connect, see
@@ -112,7 +127,8 @@ export class WebSocketHandler {
    * and Room.setupDuel) instead of a random bot roster (Room.setupMatch).
    */
   _handleStartMatch(player, msg) {
-    const mode = GAME_MODES[msg?.mode];
+    // hasOwn: GAME_MODES['constructor'] / ['__proto__'] are truthy and blew up inside setupMatch after the player had already been pulled out of their room.
+    const mode = typeof msg?.mode === 'string' && Object.hasOwn(GAME_MODES, msg.mode) ? GAME_MODES[msg.mode] : null;
     if (!mode || !CLASSES.includes(msg?.class)) return;
 
     const duelOpponent = mode.id === 'duel1v1' ? getDuelOpponent(msg?.opponentId) : null;
@@ -121,10 +137,12 @@ export class WebSocketHandler {
     this._leaveCurrentRoom(player);
     const roomId = `match-${uuid()}`;
     const room = this.server.getOrCreateRoom(roomId, { respawnEnabled: false, matchMode: true });
-
-    if (typeof msg.username === 'string' && msg.username.trim()) {
-      player.username = msg.username.trim().slice(0, 20);
+    if (!room) {
+      this.server.send(player, { type: S2C.ERROR, message: 'Server is full, try again in a moment.' });
+      return;
     }
+
+    if (cleanName(msg.username)) player.username = cleanName(msg.username);
     room.addPlayer(player);
     player.selectClass(msg.class);
 
@@ -143,14 +161,21 @@ export class WebSocketHandler {
   _handleSelectClass(player, msg) {
     const validClasses = ['fire', 'ice', 'dark', 'sword', 'druid', 'crystalmancer'];
     if (!validClasses.includes(msg.class)) return;
+    // Picking a class (re)spawns you at full health. For a living player that
+    // was a free instant heal + teleport at any moment, and in a match room it
+    // revived an eliminated player ("eliminated means eliminated until
+    // MATCH_END", see _handleRespawn). Class changes after the first pick go
+    // through RESPAWN { newClass } on the death screen. (A player who carried
+    // `isAlive` over from a previous room hasn't spawned HERE yet, so that
+    // case -- e.g. match -> main menu -> lobby -> class select -- still works.)
+    const room = player.roomId ? this.server.rooms.get(player.roomId) : null;
+    if (room?.matchMode) return;
+    if (player.isAlive && room && player.spawnedInRoom === room.id) return;
 
-    if (typeof msg.username === 'string' && msg.username.trim()) {
-      player.username = msg.username.trim().slice(0, 20);
-    }
+    if (cleanName(msg.username)) player.username = cleanName(msg.username);
     player.selectClass(msg.class);
     this.server.persistPlayer(player);
 
-    const room = player.roomId ? this.server.rooms.get(player.roomId) : null;
     if (room) {
       room.spawnPlayer(player);
       room.progressionSystem.tryAutoUnlock(player);
@@ -162,8 +187,11 @@ export class WebSocketHandler {
     const room = this.server.rooms.get(player.roomId);
     if (!room) return;
 
-    // Validate sequence
-    if (msg.seq <= player.lastAckedSeq) return;
+    // Validate sequence. Must be a finite number: `NaN <= x` is false, so a NaN
+    // seq passed this check AND stored NaN in lastAckedSeq -- after which every
+    // later comparison against it was false too, switching replay protection
+    // off for the rest of the session.
+    if (!Number.isFinite(msg.seq) || msg.seq <= player.lastAckedSeq) return;
     player.lastAckedSeq = msg.seq;
 
     room.processInput(player, {
@@ -183,14 +211,24 @@ export class WebSocketHandler {
 
   _handleEquipSpell(player, msg) {
     const { slotIndex, spellId } = msg;
-    if (slotIndex < 0 || slotIndex >= MAX_SPELL_SLOTS) return;
-    if (spellId !== null && !player.unlockedNodes.has(spellId)) return;
+    if (!Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex >= MAX_SPELL_SLOTS) return;
+    if (spellId !== null) {
+      // unlockedNodes also holds passives; only a real, equippable spell of the player's own class belongs in a slot.
+      if (typeof spellId !== 'string' || !player.unlockedNodes.has(spellId)) return;
+      const spell = getSpell(spellId);
+      if (!spell || spell.class !== player.class || !isEquippableSpell(spell)) return;
+    }
 
     player.equippedSpells[slotIndex] = spellId;
   }
 
   /** Debug mode: grant points and immediately walk the whole tree, auto-resolving any fork instantly instead of waiting on the normal 12s vote timeout, so toggling it on unlocks (and equips) everything right away. Also flags the player so every cast/mobility/basic-attack/melee cooldown check is skipped (see SpellSystem). */
   _handleDebugGrant(player) {
+    // Debug mode = every spell, +999 skill points, and NO cooldown checks at
+    // all, so on a reachable server any client could just send this message
+    // and out-fire everyone. Same trust boundary as the Experiment Lab:
+    // loopback only (WW_ALLOW_REMOTE_DEBUG=1 re-opens it for a private test deploy).
+    if (!player.isLocalConnection && process.env.WW_ALLOW_REMOTE_DEBUG !== '1') return;
     player.isDebugMode = true;
     player.skillPoints += 999;
     if (!player.class) return;
@@ -213,6 +251,13 @@ export class WebSocketHandler {
     const node = getNode(player.class, nodeId);
     if (!node) return;
     if (!canUnlockNode(node, player.unlockedNodes)) return;
+    // The class's one fork is a permanent either/or: buying the second side
+    // here skipped the vote and gave both branches.
+    if (node.branchGroup) {
+      const decided = player.divergedBranch[node.branchGroup];
+      if (decided && decided !== node.branch) return;
+      player.divergedBranch[node.branchGroup] = node.branch;
+    }
 
     player.unlockedNodes.add(nodeId);
     player.skillPoints--;
@@ -265,6 +310,9 @@ export class WebSocketHandler {
     if (!player.roomId) return;
     const room = this.server.rooms.get(player.roomId);
     if (!room) return;
+    // Open to every player (it's a practice tool), so cap it: each click otherwise
+    // added six more simulated wizards to the shared lobby, without limit.
+    if (room.botControllers.size + CLASSES.length > MAX_PRACTICE_BOTS) return;
     for (const wizardClass of CLASSES) {
       room.spawnBot({ class: wizardClass, behavior: 'aggressive' });
     }
@@ -381,8 +429,16 @@ export class WebSocketHandler {
       }
     }
 
+    // Nothing valid to save (empty / malformed payload): don't replace a committed
+    // file with `{ bank: {}, assignments: {} }`.
+    if (Object.keys(bank).length === 0) return;
+
     try {
-      await writeFile(CARD_BANK_PATH, `${JSON.stringify({ bank, assignments }, null, 2)}\n`, 'utf8');
+      await this._cardBankWrite;
+    } catch { /* previous write failed; that's reported to its own sender */ }
+    try {
+      this._cardBankWrite = writeFile(CARD_BANK_PATH, `${JSON.stringify({ bank, assignments }, null, 2)}\n`, 'utf8');
+      await this._cardBankWrite;
       console.log(`[design-lab] wrote ${Object.keys(bank).length} recipes, ${Object.keys(assignments).length} assignments`);
     } catch (err) {
       this.server.send(player, { type: S2C.ERROR, message: `Could not write card bank: ${err.message}` });

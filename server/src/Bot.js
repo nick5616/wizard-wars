@@ -1,4 +1,4 @@
-import { Player } from './Player.js';
+import { Player, COLD_SHARED_KEYS } from './Player.js';
 
 /**
  * A bot-controlled combatant. Subclasses Player (not a parallel duck-typed
@@ -6,6 +6,8 @@ import { Player } from './Player.js';
  * time, and flows through every existing server.players / room.playerIds
  * lookup unmodified — bots are just Players with ws: null and a controller.
  */
+const BOT_COLD_KEYS = [...COLD_SHARED_KEYS, 'behavior', 'autoEquipOnLevel'];
+
 export class Bot extends Player {
   constructor({ id, username, class: wizardClass, behavior = 'aggressive', autoEquipOnLevel = true, team = null }) {
     super({ id, ws: null, username });
@@ -28,6 +30,8 @@ export class Bot extends Player {
   nextInputSeq() {
     return ++this._inputSeq;
   }
+
+  _coldSharedKeys() { return BOT_COLD_KEYS; }
 
   serialize() {
     return { ...super.serialize(), isBot: true, behavior: this.behavior, autoEquipOnLevel: this.autoEquipOnLevel };

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type {
   PlayerState, ProjectileState, EffectState, DomainState, BarrierState,
-  Vec3, KillFeedEntry, WizardClass,
+  Vec3, KillFeedEntry, WizardClass, GameTickPayload,
 } from '../types/game.types';
 import { MAX_SPELL_SLOTS } from 'shared/spells';
 
@@ -144,7 +144,7 @@ interface GameState {
 
   // Setters
   setPhase: (p: GameState['phase']) => void;
-  applyTick: (players: Record<string, PlayerState>, projectiles: Record<string, ProjectileState>, effects: Record<string, EffectState>, domains: Record<string, DomainState>, barriers: Record<string, BarrierState>, tick: number, ts: number, localId: string) => void;
+  applyTick: (players: Record<string, PlayerState>, projectiles: Record<string, ProjectileState>, effects: Record<string, EffectState>, domains: Record<string, DomainState>, barriers: Record<string, BarrierState>, tick: number, ts: number, localId: string, delta?: boolean) => void;
   setLocalClass: (c: WizardClass) => void;
   setActiveSlot: (i: number) => void;
   setLocalCooldown: (spellId: string, ms: number) => void;
@@ -209,6 +209,38 @@ const defaultLocal: LocalPlayerState = {
   moveForwardRatio: 0,
 };
 
+/** New map holding exactly the ids in `incoming`, each merged over its previous object (if any). */
+function mergeById<T extends object>(prev: Record<string, T>, incoming: Record<string, T>): Record<string, T> {
+  const out: Record<string, T> = {};
+  for (const id in incoming) {
+    const old = prev[id];
+    out[id] = old ? { ...old, ...incoming[id] } : incoming[id];
+  }
+  return out;
+}
+
+/**
+ * Prepares a decoded GAME_TICK for consumers (in place). For delta payloads:
+ * stamps `id` on every player, treats an absent activeEffects/cooldowns as {} and an
+ * absent defensive/parry/choosing-branch flag as false (the server omits them while empty/false), and folds the
+ * owner-only `self` block into players[localId] so e.g. reconcile and the HUD
+ * see cooldowns/progression on that object. No-op for full payloads.
+ */
+export function expandTickPayload(payload: GameTickPayload, localId: string): void {
+  if (!payload.delta) return;
+  for (const pid in payload.players) {
+    const p = payload.players[pid];
+    p.id ??= pid;
+    p.activeEffects ??= {};
+    p.cooldowns ??= {};
+    p.isChoosingBranch ??= false;
+    p.defensiveActive ??= false;
+    p.parryActive ??= false;
+  }
+  const me = payload.players[localId];
+  if (me && payload.self) Object.assign(me, payload.self);
+}
+
 export const useGameStore = create<GameState>((set, get) => ({
   players: {},
   projectiles: {},
@@ -237,9 +269,15 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   setPhase: (phase) => set({ phase }),
 
-  applyTick: (players, projectiles, effects, domains, barriers, tick, ts, localId) => {
+  applyTick: (incomingPlayers, incomingProjectiles, effects, domains, barriers, tick, ts, localId, delta = false) => {
+    set((s) => {
+    // delta: entries are partial and merge into the existing objects (so every
+    // consumer still sees complete player/projectile objects); anything not in
+    // the payload is gone. Otherwise (ROOM_STATE, mock server) replace outright.
+    const players = delta ? mergeById(s.players, incomingPlayers) : incomingPlayers;
+    const projectiles = delta ? mergeById(s.projectiles, incomingProjectiles) : incomingProjectiles;
     const localPlayer = players[localId];
-    set((s) => ({
+    return {
       players,
       projectiles,
       effects,
@@ -271,7 +309,8 @@ export const useGameStore = create<GameState>((set, get) => ({
         parryActive: !!localPlayer.parryActive,
         phantomCasts: localPlayer.phantomCasts ?? 0,
       } : s.local,
-    }));
+    };
+    });
   },
 
   setLocalClass: (c) => set((s) => ({
@@ -364,3 +403,4 @@ export const useGameStore = create<GameState>((set, get) => ({
   setBirdsEyeView: (v) => set({ birdsEyeView: v }),
   setThirdPerson: (v) => set({ thirdPerson: v }),
 }));
+

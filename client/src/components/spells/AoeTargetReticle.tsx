@@ -37,6 +37,10 @@ function resolvePlayerIdFromHit(obj: THREE.Object3D | null): string | undefined 
   return undefined;
 }
 
+// Per-frame scratch vectors (this runs in useFrame while an AoE is readied).
+const fwdScratch = new THREE.Vector3();
+const originScratch = new THREE.Vector3();
+
 export function AoeTargetReticle() {
   const { camera } = useThree();
   const raycasterRef = useRef(new THREE.Raycaster());
@@ -97,9 +101,9 @@ export function AoeTargetReticle() {
       cx = local.position.x;
       cz = local.position.z;
     } else {
-      const fwd = new THREE.Vector3();
+      const fwd = fwdScratch;
       camera.getWorldDirection(fwd);
-      const origin = new THREE.Vector3(local.position.x, local.position.y, local.position.z);
+      const origin = originScratch.set(local.position.x, local.position.y, local.position.z);
 
       if (isArc) {
         const horizLen = Math.hypot(fwd.x, fwd.z) || 1;

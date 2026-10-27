@@ -26,10 +26,19 @@ export interface CastAnim { kind: IconKind; startedAt: number; }
 export function useCastAnimation(playerId: string | null | undefined) {
   const castAnimRef = useRef<CastAnim | null>(null);
   const prevIds = useRef<Set<string>>(new Set());
+  // The store swaps in new projectiles/effects objects only on a tick sync
+  // (20Hz), so between syncs there is nothing new to find -- skip the scan
+  // (and its Set/Object.entries garbage) on the ~2/3 of frames where both
+  // references are unchanged.
+  const lastProjectiles = useRef<unknown>(null);
+  const lastEffects = useRef<unknown>(null);
 
   useFrame(() => {
     if (!playerId) return;
     const { projectiles, effects } = useGameStore.getState();
+    if (projectiles === lastProjectiles.current && effects === lastEffects.current) return;
+    lastProjectiles.current = projectiles;
+    lastEffects.current = effects;
     const currentIds = new Set<string>();
 
     for (const [id, p] of Object.entries(projectiles)) {

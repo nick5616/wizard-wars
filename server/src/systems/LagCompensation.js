@@ -5,6 +5,14 @@ import { hatCenterY, hatRadius } from 'shared/leveling';
  * When a hit must be resolved, rewind to the snapshot closest to the
  * client's timestamp and check positions there.
  */
+// Hard cap on how far into the past a hit can be rewound, regardless of what
+// the client claims. A client sees remote players INTERPOLATION_DELAY (100ms)
+// behind its own clock, so the honest rewind is ~100ms plus whatever its
+// clock-sync error is; 250ms leaves headroom for that while stopping a
+// high-latency (or lying) client from shooting where targets were half a
+// second ago -- STATE_HISTORY_MS alone (500ms) was the only bound before.
+export const MAX_REWIND_MS = 250;
+
 export class LagCompensation {
   constructor(maxSnapshots) {
     this.maxSnapshots = maxSnapshots;
@@ -18,9 +26,13 @@ export class LagCompensation {
     }
   }
 
-  /** Find snapshot closest to the given server timestamp. */
+  /** Find snapshot closest to the given server timestamp (clamped to [newest - MAX_REWIND_MS, newest]; non-finite means "now"). */
   getSnapshotAt(timestamp) {
     if (this.snapshots.length === 0) return null;
+
+    const newest = this.snapshots[this.snapshots.length - 1].timestamp;
+    if (!Number.isFinite(timestamp) || timestamp > newest) timestamp = newest;
+    else if (timestamp < newest - MAX_REWIND_MS) timestamp = newest - MAX_REWIND_MS;
 
     let best = this.snapshots[0];
     let bestDiff = Math.abs(timestamp - best.timestamp);

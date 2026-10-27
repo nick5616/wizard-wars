@@ -3,6 +3,8 @@ import type { WizardClass } from '../types/game.types';
 
 interface NetworkState {
   connected: boolean;
+  // True once the server told us (close code 4001) that a newer tab took over this clientId.
+  replaced: boolean;
   rtt: number;
   jitter: number;
   localPlayerId: string | null;
@@ -18,6 +20,7 @@ interface NetworkState {
   // odds before a 1v1 match starts.
   elo: number;
   setConnected: (v: boolean) => void;
+  setReplaced: (v: boolean) => void;
   setRtt: (ms: number) => void;
   setJitter: (ms: number) => void;
   setLocalPlayerId: (id: string) => void;
@@ -29,6 +32,7 @@ interface NetworkState {
 
 export const useNetworkStore = create<NetworkState>((set) => ({
   connected: false,
+  replaced: false,
   rtt: 0,
   jitter: 0,
   localPlayerId: null,
@@ -37,6 +41,7 @@ export const useNetworkStore = create<NetworkState>((set) => ({
   restoredClass: null,
   elo: 1000,
   setConnected: (v) => set({ connected: v }),
+  setReplaced: (v) => set({ replaced: v }),
   setRtt: (ms) => set({ rtt: ms }),
   setJitter: (ms) => set({ jitter: ms }),
   setLocalPlayerId: (id) => set({ localPlayerId: id }),

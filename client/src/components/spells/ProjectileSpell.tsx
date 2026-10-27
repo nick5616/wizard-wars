@@ -1,4 +1,4 @@
-import { useRef, useMemo } from 'react';
+import { useRef, useMemo, useEffect } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { getSpell } from 'shared/spells';
@@ -7,6 +7,9 @@ import type { ProjectileState, SpellDef } from '../../types/game.types';
 import { createBladeGeometry } from '../../utils/bladeGeometry';
 import { createRupeeGeometry } from '../../utils/rupeeGeometry';
 import { crystalShine } from '../../utils/crystalMaterial';
+import { usePooledLight } from '../core/LightPool';
+
+const UP_AXIS = new THREE.Vector3(0, 1, 0);
 
 interface ProjectileSpellProps {
   projectile: ProjectileState;
@@ -18,8 +21,6 @@ export function ProjectileSpell({ projectile }: ProjectileSpellProps) {
   const crystalRef = useRef<THREE.Mesh>(null);
   const glowRef    = useRef<THREE.Mesh>(null);
   const trailRef   = useRef<THREE.Mesh>(null);
-  const light1Ref  = useRef<THREE.PointLight>(null);
-  const light2Ref  = useRef<THREE.PointLight>(null);
   const posRef     = useRef({ ...projectile.position });
   const velRef     = useRef({ ...projectile.velocity });
   const timeRef    = useRef(0);
@@ -60,6 +61,10 @@ export function ProjectileSpell({ projectile }: ProjectileSpellProps) {
     () => (isCrystal ? createRupeeGeometry(coreRadius * 1.3, coreRadius * 2.3) : null),
     [isCrystal, coreRadius],
   );
+  // Geometries handed to a mesh via the `geometry` prop aren't owned by r3f,
+  // so free them ourselves when the projectile expires (or its shape changes).
+  useEffect(() => () => bladeGeometry?.dispose(), [bladeGeometry]);
+  useEffect(() => () => crystalGeometry?.dispose(), [crystalGeometry]);
   const crystalMaterialProps = useMemo(() => (isCrystal ? crystalShine(color) : null), [isCrystal, color]);
 
   // Multi-projectile spread casts (Bladestorm, Dirt Clod, ...) spawn several
@@ -71,6 +76,16 @@ export function ProjectileSpell({ projectile }: ProjectileSpellProps) {
   // Blades never self-light at all, regardless of spread -- shine comes from
   // the scene's real lights, not from being a lamp themselves.
   const ownsLight = !isBlade && (!spell?.spreadCount || spell.spreadCount <= 1);
+
+  // One pooled light per owning projectile (was two <pointLight>s, whose
+  // mount/unmount changed the scene's light count and recompiled every lit
+  // shader -- see LightPool.tsx). Intensity/distance blend the old tight
+  // 18@12 and wide 6@24 pair into a single falloff. Null when the pool is
+  // exhausted or the projectile doesn't own a light.
+  const lightRef = usePooledLight(
+    { color: glowColor, distance: 18, intensity: 20, position: projectile.position },
+    ownsLight,
+  );
 
   // Velocity-derived trail geometry — recomputed only when velocity changes,
   // which for straight-line spells only happens at server-snapshot rate. For
@@ -84,7 +99,7 @@ export function ProjectileSpell({ projectile }: ProjectileSpellProps) {
     const dir   = speed > 0.1
       ? new THREE.Vector3(v.x / speed, v.y / speed, v.z / speed)
       : new THREE.Vector3(0, 0, -1);
-    const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+    const q = new THREE.Quaternion().setFromUnitVectors(UP_AXIS, dir);
     return { velDir: dir, trailLen: len, trailQuat: q };
   }, [projectile.velocity.x, projectile.velocity.y, projectile.velocity.z]);
 
@@ -119,7 +134,7 @@ export function ProjectileSpell({ projectile }: ProjectileSpellProps) {
       curDir = speed > 0.1
         ? liveDirScratch.current.set(v.x / speed, v.y / speed, v.z / speed)
         : liveDirScratch.current.set(0, 0, -1);
-      curQuat = liveQuatScratch.current.setFromUnitVectors(new THREE.Vector3(0, 1, 0), curDir);
+      curQuat = liveQuatScratch.current.setFromUnitVectors(UP_AXIS, curDir);
     }
 
     const pulse = 1 + Math.sin(timeRef.current * 18) * 0.09;
@@ -156,10 +171,7 @@ export function ProjectileSpell({ projectile }: ProjectileSpellProps) {
       );
       if (isArcType) trailRef.current.quaternion.copy(curQuat);
     }
-    if (ownsLight) {
-      if (light1Ref.current) light1Ref.current.position.set(x, y, z);
-      if (light2Ref.current) light2Ref.current.position.set(x, y, z);
-    }
+    if (ownsLight && lightRef.current) lightRef.current.position.set(x, y, z);
   });
 
   const ip: [number, number, number] = [
@@ -223,15 +235,6 @@ export function ProjectileSpell({ projectile }: ProjectileSpellProps) {
         </>
       )}
 
-      {/* Tight bright light that illuminates nearby surfaces -- skipped for
-          spread casts and blades, see `ownsLight` above */}
-      {ownsLight && (
-        <>
-          <pointLight ref={light1Ref} position={ip} color={glowColor} intensity={18} distance={12} decay={2} />
-          {/* Wide soft ambient glow */}
-          <pointLight ref={light2Ref} position={ip} color={glowColor} intensity={6}  distance={24} decay={2} />
-        </>
-      )}
     </>
   );
 }

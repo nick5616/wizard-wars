@@ -21,6 +21,12 @@ import { applyGroundFriction, applyGroundAccel, applyAirAccel, normalizeWishDir 
 import { STATUS_EFFECTS, DOMAIN_CONFIGS } from 'shared/gameConfig';
 import { CLASS_LABEL, classSymbol } from 'shared/classFlavor';
 
+// Opt-in (WW_NETSTATS=1) per-tick serialize cost logging, used to measure the GAME_TICK payload work.
+const r2 = (v) => Math.round(v * 100) / 100;
+const r3 = (v) => Math.round(v * 1000) / 1000;
+const NET_STATS = !!process.env.WW_NETSTATS;
+const _netStat = { ns: 0, n: 0, bytes: 0 };
+
 const SPAWN_POSITIONS = [
   { x: 0, y: PLAYER_HEIGHT, z: -20 },
   { x: 20, y: PLAYER_HEIGHT, z: 0 },
@@ -32,6 +38,15 @@ const SPAWN_POSITIONS = [
   { x: -14, y: PLAYER_HEIGHT, z: -14 },
 ];
 
+// Movement input queue (see Room._simulatePlayer): the cap is ~1s of input,
+// beyond which the oldest steps are dropped (a real desync, the client snaps).
+const MAX_INPUT_QUEUE = 64;
+const CATCHUP_BACKLOG = 2;  // queued steps above this => simulate extra steps per tick
+const MAX_STEPS_PER_TICK = 4;
+const MAX_STEP_CREDIT = 48; // ~0.75s of burst allowance; refills 1 step per tick
+
+const MAX_BOTS_PER_ROOM = 24; // SPAWN_BOTS is open to every player and adds 6 per press -- without a cap one client can bury the tick loop in bots
+const ERROR_LOG_INTERVAL_MS = 5000; // a phase that throws every tick would otherwise log 64 stack traces/second
 const MATCH_COUNTDOWN_MS = 3000; // grace period after spawning into a single-player match before bots start acting
 const DUEL_ELO_K = 32; // standard chess-style K-factor -- how many rating points a single duel can move
 
@@ -53,6 +68,7 @@ export class Room {
     this.duelOpponentElo = null;
     this.playerIds = new Set();
     this.projectiles = new Map();  // projectileId → projectile state
+    this._projWire = new WeakMap(); // projectile object → ownerId last sent in full/delta form (see _serializeProjectilesDelta)
     this.barriers = new Map();     // barrierId → barrier state
     this.effects = new Map();      // effectId → aoe effect state
     this.domains = new Map();      // domainId → domain state
@@ -84,7 +100,16 @@ export class Room {
   addPlayer(player) {
     this.playerIds.add(player.id);
     player.roomId = this.id;
-    player.skillPoints = STARTING_SKILL_POINTS;
+    player.resetWireCache(); // next GAME_TICK re-sends this player's cold fields to everyone
+    // Starting points are a one-time grant per fresh session. This used to be
+    // an unconditional `= STARTING_SKILL_POINTS` on EVERY join, so spending a
+    // point and then re-sending JOIN_ROOM (or bouncing lobby <-> match) handed
+    // the spent point straight back -- unlimited skill nodes -- and it also
+    // clobbered the balance restored from Redis for a returning player.
+    if (!player.startingPointsGranted) {
+      player.startingPointsGranted = true;
+      if (!player.class) player.skillPoints = STARTING_SKILL_POINTS;
+    }
 
     // Send full current state to the joining player
     this.server.send(player, {
@@ -112,7 +137,50 @@ export class Room {
     // ProgressionSystem._openChoice) -- without this, a player who
     // disconnects mid-prompt would leave a stray entry behind forever.
     this.progressionSystem.pendingVotes.delete(playerId);
+    // The vote that froze + hid them (isChoosingBranch) dies with the room;
+    // without this they arrived in the next room (or the lab) frozen and
+    // invisible with no prompt left to answer.
+    const leaving = this.server.players.get(playerId);
+    if (leaving) leaving.isChoosingBranch = false;
+    this._forget(playerId);
+    this._purgeOwnedBy(playerId);
     this.server.broadcast(this.id, { type: S2C.PLAYER_LEFT, playerId });
+  }
+
+  /**
+   * Removes everything in flight that `ownerId` cast in this room. Their
+   * projectiles / beams / airbuds / domains used to keep running after they
+   * left, and a hit by one still credited kills + XP to a player who was by
+   * then in another room, opening skill votes in THIS room's ProgressionSystem
+   * for someone who is not here (a stale entry, and a frozen player there).
+   */
+  _purgeOwnedBy(ownerId) {
+    for (const [id, p] of this.projectiles) if (p.ownerId === ownerId) this.projectiles.delete(id);
+    for (const [id, e] of this.effects) if (e.ownerId === ownerId) this.effects.delete(id);
+    for (const [id, b] of this.barriers) if (b.ownerId === ownerId) this.barriers.delete(id);
+    for (const [id, d] of this.domains) {
+      if (d.ownerId !== ownerId) continue;
+      this.domains.delete(id);
+      this.server.broadcast(this.id, { type: S2C.DOMAIN_END, domainId: id });
+    }
+  }
+
+  /**
+   * Drops per-opponent bookkeeping that names `id`. headToHead is keyed
+   * "a>b" and each Player keeps lastDamageTime/recentDamageDealt by target id;
+   * in a long-lived room (the lobby) with bots coming and going, every new bot
+   * id added entries that were never removed.
+   */
+  _forget(id) {
+    for (const key of this.headToHead.keys()) {
+      const sep = key.indexOf('>');
+      if (key.slice(0, sep) === id || key.slice(sep + 1) === id) this.headToHead.delete(key);
+    }
+    for (const pid of this.playerIds) {
+      const p = this.server.players.get(pid);
+      p?.lastDamageTime.delete(id);
+      p?.recentDamageDealt.delete(id);
+    }
   }
 
   /**
@@ -126,6 +194,8 @@ export class Room {
     const pos = position ?? SPAWN_POSITIONS[this.spawnIndex % SPAWN_POSITIONS.length];
     if (!position) this.spawnIndex++;
     player.spawn({ ...pos });
+    if (player.inputQueue) player.inputQueue.length = 0; // pre-death/pre-teleport inputs must not replay on the fresh spawn
+    player.spawnedInRoom = this.id;
     if (yaw != null) player.yaw = yaw;
     this.server.broadcast(this.id, {
       type: S2C.PLAYER_RESPAWNED,
@@ -136,7 +206,45 @@ export class Room {
   }
 
   scheduleRespawn(playerId) {
+    // One pending auto-respawn per player: a death, a manual respawn and a
+    // second death used to leave the first timer behind, which then respawned
+    // the player early (skipping the second death's delay).
+    this._pendingRespawns = this._pendingRespawns.filter((r) => r.playerId !== playerId);
     this._pendingRespawns.push({ playerId, at: Date.now() + RESPAWN_DELAY });
+  }
+
+  /**
+   * Tears the room down completely: stops its loop and removes every bot it
+   * spawned from the server-wide player registry. Room.stop() alone only
+   * stopped the loop, so bots (and their BotControllers) of a closed match /
+   * Experiment Lab room stayed in server.players forever.
+   */
+  destroy() {
+    this.loop.stop();
+    for (const botId of [...this.botControllers.keys()]) {
+      this.botControllers.delete(botId);
+      this.server.players.delete(botId);
+      this.playerIds.delete(botId);
+    }
+    this.projectiles.clear();
+    this.effects.clear();
+    this.barriers.clear();
+    this.domains.clear();
+    this.lagCompensation.snapshots.length = 0;
+    this._pendingRespawns.length = 0;
+    this.progressionSystem.pendingVotes.clear();
+    this.damageLog.clear();
+    this.headToHead.clear();
+  }
+
+  /** Real (non-bot) players currently in the room. */
+  humanCount() {
+    let n = 0;
+    for (const pid of this.playerIds) {
+      const p = this.server.players.get(pid);
+      if (p && !p.isBot) n++;
+    }
+    return n;
   }
 
   /**
@@ -201,6 +309,18 @@ export class Room {
 
   /** Creates and spawns a bot into this room. Returns the Bot instance. */
   spawnBot({ class: wizardClass, behavior = 'aggressive', position = null, yaw = null, loadout = null, autoEquipOnLevel = true, team = null }) {
+    if (this.botControllers.size >= MAX_BOTS_PER_ROOM) return null;
+    // `position` / `loadout` come straight off the wire for the lab's
+    // C2S.SPAWN_BOT: NaN/Infinity/strings here would put a bot at a non-finite
+    // position (poisoning every tick) or an arbitrary object into its loadout.
+    if (position && !(Number.isFinite(position.x) && Number.isFinite(position.z))) position = null;
+    if (position) {
+      const r = Math.hypot(position.x, position.z);
+      const max = ARENA_RADIUS - 1;
+      const k = r > max ? max / r : 1;
+      position = { x: position.x * k, y: Number.isFinite(position.y) ? Math.min(Math.max(position.y, PLAYER_HEIGHT), 60) : PLAYER_HEIGHT, z: position.z * k };
+    }
+    if (loadout) loadout = loadout.map((spellId) => (typeof spellId === 'string' && getSpell(spellId)?.class === wizardClass ? spellId : null));
     const id = `bot-${uuid()}`;
     // "DruidBot_4324" -- names the class so a killfeed/scoreboard entry reads
     // as an actual opponent instead of an anonymous id fragment.
@@ -229,6 +349,8 @@ export class Room {
     this.botControllers.delete(botId);
     this.playerIds.delete(botId);
     this.server.players.delete(botId);
+    this._forget(botId);
+    this._purgeOwnedBy(botId);
     this.server.broadcast(this.id, { type: S2C.PLAYER_LEFT, playerId: botId });
   }
 
@@ -238,69 +360,135 @@ export class Room {
     const now = Date.now();
     const dt = TICK_INTERVAL / 1000; // seconds
 
-    // Process pending respawns
-    const remaining = [];
-    for (const r of this._pendingRespawns) {
-      if (now >= r.at) {
-        const p = this.server.players.get(r.playerId);
-        if (p) this.spawnPlayer(p);
-      } else {
-        remaining.push(r);
+    // Nobody here: nothing to simulate or broadcast. The always-on lobby sat
+    // here ticking at 64Hz (snapshot + serialize + broadcast to no one) around
+    // the clock. World state is dropped so the next arrival doesn't inherit
+    // frozen projectiles / half-expired domains.
+    if (this.playerIds.size === 0) {
+      if (this.projectiles.size || this.effects.size || this.domains.size || this.barriers.size) {
+        this.projectiles.clear(); this.effects.clear(); this.domains.clear(); this.barriers.clear();
       }
+      this._pendingRespawns.length = 0;
+      this.lagCompensation.snapshots.length = 0;
+      this.tick++;
+      return;
     }
-    this._pendingRespawns = remaining;
+
+    // Each phase is isolated: a throw in (say) projectile simulation used to
+    // abort the whole tick -- including the broadcast -- every single tick
+    // thereafter, freezing the room for everyone until a restart.
+    this._phase('respawns', () => {
+      const remaining = [];
+      for (const r of this._pendingRespawns) {
+        if (now >= r.at) {
+          const p = this.server.players.get(r.playerId);
+          // Only respawn someone who is still dead and still HERE: a manual
+          // respawn, a room switch or a reconnect (new Player, same id) since
+          // the death must not get teleported/healed by a stale timer.
+          if (p && !p.isAlive && p.roomId === this.id && this.playerIds.has(p.id)) this.spawnPlayer(p);
+        } else {
+          remaining.push(r);
+        }
+      }
+      this._pendingRespawns = remaining;
+    });
 
     // Bots decide + feed input through the exact same path real players use
-    for (const controller of this.botControllers.values()) {
-      controller.tick(now);
-    }
+    this._phase('bots', () => {
+      for (const controller of this.botControllers.values()) controller.tick(now);
+    });
 
     // Process each player's movement
-    for (const pid of this.playerIds) {
-      const player = this.server.players.get(pid);
-      if (!player || !player.isAlive) continue;
-      this._simulatePlayer(player, dt, now);
-    }
+    this._phase('movement', () => {
+      for (const pid of this.playerIds) {
+        const player = this.server.players.get(pid);
+        if (!player || !player.isAlive) continue;
+        this._simulatePlayer(player, dt, now);
+      }
+    });
 
-    // Simulate projectiles
-    this.spellSystem.tickProjectiles(dt, now);
-
-    // Simulate effects / DoTs
-    this.spellSystem.tickEffects(dt, now);
-
-    // Resolve windup casts whose delay has elapsed
-    this.spellSystem.tickPendingCasts(now);
+    this._phase('projectiles', () => this.spellSystem.tickProjectiles(dt, now));
+    this._phase('effects', () => this.spellSystem.tickEffects(dt, now));
+    this._phase('pendingCasts', () => this.spellSystem.tickPendingCasts(now));
 
     // Numeric consequences of status effects (burn DoT, Crystalmancer Fossilize on Petrify
     // expiry) — must run BEFORE the generic per-player expiry cleanup below, since
     // that cleanup deletes the very entries this needs to inspect one last time.
-    this._tickStatusEffects(now);
+    this._phase('statusEffects', () => this._tickStatusEffects(now));
 
     // Tick player status effects (generic expiry cleanup) + mana regen
-    for (const pid of this.playerIds) {
-      const player = this.server.players.get(pid);
-      if (!player) continue;
-      player.tickEffects(now);
-      if (player.isAlive) player.regenMana(dt);
-    }
+    this._phase('playerEffects', () => {
+      for (const pid of this.playerIds) {
+        const player = this.server.players.get(pid);
+        if (!player) continue;
+        player.tickEffects(now);
+        if (player.isAlive) player.regenMana(dt);
+      }
+    });
 
     // Auto-resolve any skill-tree fork votes nobody answered in time
-    this.progressionSystem.tickVotes(now);
+    this._phase('votes', () => this.progressionSystem.tickVotes(now));
 
     // Save snapshot for lag compensation
-    this.lagCompensation.save(this.tick, now, this._snapshotState());
+    this._phase('snapshot', () => this.lagCompensation.save(this.tick, now, this._snapshotState()));
 
     // Broadcast authoritative state
     this.tick++;
-    if (this.tick % 1 === 0) { // every tick for now (can skip for bandwidth)
-      this._broadcastTick(now);
+    this._phase('broadcast', () => this._broadcastTick(now));
+  }
+
+  /** Runs one tick phase; a throw is logged (rate-limited) and the rest of the tick still happens. */
+  _phase(name, fn) {
+    try {
+      fn();
+    } catch (e) {
+      const t = Date.now();
+      if (!this._lastPhaseErrorAt || t - this._lastPhaseErrorAt > ERROR_LOG_INTERVAL_MS) {
+        this._lastPhaseErrorAt = t;
+        console.error(`[GameLoop] Tick error in room ${this.id} (${name} phase):`, e);
+      }
     }
   }
 
+  /**
+   * Consumes queued movement inputs for this tick. Each client input is one
+   * fixed 1/TICK_RATE step (CameraController sends exactly one per predicted
+   * step), so simulating exactly one step per input -- never skipping or
+   * overwriting one -- is what keeps this identical to the client's
+   * prediction/reconcile replay. The old single `pendingInput` slot dropped
+   * every input but the newest whenever two arrived in the same tick
+   * (ordinary network jitter) and simulated nothing on a tick with none, so
+   * the server walked a different number of steps than the client predicted
+   * and the player rubber-banded constantly under latency.
+   *
+   * Normally one input per tick. After a stall (a TCP head-of-line hiccup
+   * delivering a burst) it catches up a few steps per tick, bounded by a
+   * step-credit bucket that refills 1/tick so a flooding client can't exceed
+   * the real-time movement speed on average (speed hack guard).
+   */
   _simulatePlayer(player, dt, now) {
-    if (!player.pendingInput) return;
-    const input = player.pendingInput;
-    player.pendingInput = null;
+    // Credit accrues every tick (even starved ones), so a stall's worth of
+    // credit is there to drain the burst that follows it.
+    player.stepCredit = Math.min(MAX_STEP_CREDIT, (player.stepCredit ?? MAX_STEP_CREDIT) + 1);
+    const queue = player.inputQueue;
+    if (!queue || queue.length === 0) return;
+    const backlog = queue.length;
+    const want = backlog > CATCHUP_BACKLOG ? Math.min(backlog - 1, MAX_STEPS_PER_TICK) : 1;
+    const steps = Math.min(want, player.stepCredit);
+    for (let i = 0; i < steps; i++) {
+      const input = queue.shift();
+      player.stepCredit--;
+      this._stepPlayer(player, input, dt, now);
+      player.lastInputSeq = input.seq; // ack = last input actually simulated, not merely received
+      if (!player.isAlive) { queue.length = 0; break; }
+    }
+  }
+
+  _stepPlayer(player, input, dt, now) {
+    // Mobility (Shift) resolves here, at its place in the input stream, rather
+    // than when the packet arrives, so the dash/launch lands between exactly
+    // the same two movement steps the client predicted it between.
+    if (input.mobility) this.spellSystem.handleMobility(player, input);
 
     const speedMult = player.getSpeedMultiplier();
     const footwork = player.class === 'sword' && player.unlockedNodes.has('footwork') ? 1.08 : 1;
@@ -310,7 +498,11 @@ export class Room {
     // shared/movement.js) instead of instantly setting velocity to the wish
     // speed -- this gives momentum, ground friction, and (crucially) air
     // strafing, which is what makes bunny hopping possible.
-    const yaw = player.yaw;
+    // This input's yaw, not the previous step's -- the client predicts each
+    // step with the yaw it sent in the same input, so using last step's
+    // (player.yaw lagged one input behind) rotated the wish direction by one
+    // step's worth of mouse turn on every step while turning.
+    const yaw = input.yaw;
     const cos = Math.cos(yaw);
     const sin = Math.sin(yaw);
     let wishX = 0, wishZ = 0;
@@ -424,29 +616,92 @@ export class Room {
     player.pitch = input.pitch;
   }
 
+  /**
+   * Coerces one untrusted PLAYER_INPUT into a well-typed input, or null to
+   * drop it. Everything downstream (movement, projectile spawn, aoe placement,
+   * beam direction) does arithmetic on these fields and then broadcasts the
+   * result, so a single NaN/Infinity/string -- trivially sendable, JSON `1e999`
+   * parses to Infinity -- would put non-finite numbers into the world state
+   * and into every client's GAME_TICK (JSON turns them into null).
+   */
+  _sanitizeInput(player, input) {
+    if (!input || typeof input !== 'object') return null;
+    const fin = (v) => typeof v === 'number' && Number.isFinite(v);
+    const unitVec = (v) => {
+      if (!v || typeof v !== 'object' || !fin(v.x) || !fin(v.y) || !fin(v.z)) return null;
+      const len = Math.hypot(v.x, v.y, v.z);
+      if (!(len > 1e-6) || !Number.isFinite(len)) return null;
+      return { x: v.x / len, y: v.y / len, z: v.z / len };
+    };
+    const now = Date.now();
+    const out = {
+      seq: input.seq,
+      // Wire timestamps feed lag-compensation rewind and are stored on projectiles.
+      // The client sends `ts` (its clock-synced server time); `clientTimestamp`
+      // is the older name, still accepted.
+      clientTimestamp: fin(input.ts) ? input.ts : fin(input.clientTimestamp) ? input.clientTimestamp : now,
+      // Server time the client was rendering remote players at when it sent
+      // this (EntityInterpolation.renderTime) -- see SpellSystem._lagCompTime.
+      viewTs: fin(input.viewTs) ? input.viewTs : null,
+      flags: fin(input.flags) ? (Math.trunc(input.flags) & 0xff) : 0,
+      yaw: fin(input.yaw) && Math.abs(input.yaw) < 1e6 ? input.yaw : player.yaw,
+      pitch: fin(input.pitch) ? Math.max(-Math.PI / 2, Math.min(Math.PI / 2, input.pitch)) : player.pitch,
+      cast: null,
+      mobility: input.mobility === true,
+      defensive: input.defensive === true,
+      basicAttack: null,
+      melee: null,
+      activeSlot: Number.isInteger(input.activeSlot) && input.activeSlot >= 0 && input.activeSlot < MAX_SPELL_SLOTS ? input.activeSlot : undefined,
+      mobilityForced: false, // server-internal (Undying); never accepted off the wire
+    };
+    if (!fin(out.seq)) return null;
+
+    const c = input.cast;
+    if (c && typeof c === 'object') {
+      const aimDir = unitVec(c.aimDir);
+      if (typeof c.spellId === 'string' && Number.isInteger(c.slotIndex) && c.slotIndex >= 0 && c.slotIndex < MAX_SPELL_SLOTS && aimDir) {
+        out.cast = { spellId: c.spellId, slotIndex: c.slotIndex, aimDir, targetId: typeof c.targetId === 'string' ? c.targetId : undefined };
+      }
+    }
+    for (const key of ['basicAttack', 'melee']) {
+      const a = input[key];
+      const aimDir = a && typeof a === 'object' ? unitVec(a.aimDir) : null;
+      if (aimDir) out[key] = { aimDir };
+    }
+    return out;
+  }
+
   processInput(player, input) {
+    input = this._sanitizeInput(player, input);
+    if (!input) return;
+
     // Frozen and hidden while a skill-tree fork vote is open for them -- see
     // ProgressionSystem._openVote. No movement, no casts, nothing.
     if (player.isChoosingBranch) return;
 
-    // Store latest input for next tick
-    player.pendingInput = input;
-    player.lastInputSeq = input.seq;
+    // Queue the movement step; the sim consumes it on a later tick (see
+    // _simulatePlayer). A dead player's inputs (in flight when they died) are
+    // acked but not queued, so they can't replay on top of the respawn.
+    if (player.isAlive) {
+      const queue = (player.inputQueue ??= []);
+      queue.push(input);
+      if (queue.length > MAX_INPUT_QUEUE) queue.shift();
+    } else {
+      player.lastInputSeq = input.seq;
+    }
     // Which hotbar slot is selected -- not part of physics sim, applied
     // immediately. Drives the sniper-sight aim line for endgame hitscan
     // spells (see Player.serialize / SniperSightLines.tsx): everyone needs
     // to see it, not just the caster, so it has to be broadcast state.
     if (typeof input.activeSlot === 'number') player.activeSlot = input.activeSlot;
+    if (input.viewTs != null) player.lastViewTs = input.viewTs;
 
     // Handle spell cast in input
     if (input.cast) {
       this.spellSystem.handleCastRequest(player, input.cast, input.clientTimestamp);
     }
 
-    // Handle mobility
-    if (input.mobility) {
-      this.spellSystem.handleMobility(player, input);
-    }
+    // Mobility (Shift) is deferred to _stepPlayer, see there.
 
     // Handle defensive spell (Q)
     if (input.defensive) {
@@ -463,6 +718,10 @@ export class Room {
   }
 
   applyDamage(targetId, damage, sourceId, spellId, isHeadshot = false, bypassDefense = false) {
+    // A NaN/Infinity/negative damage value would set health to NaN (which
+    // `health <= 0` never catches, leaving an immortal, unserializable
+    // player) or heal the target.
+    if (!Number.isFinite(damage) || damage < 0) return 0;
     const target = this.server.players.get(targetId);
     if (!target || !target.isAlive) return 0;
     if (target.hasEffect('phase')) return 0;
@@ -732,11 +991,14 @@ export class Room {
     player.isAlive = false;
     player.health = 0;
 
-    const killer = this.server.players.get(killerId);
+    // Dying to your own damage (self-hit AoE, reflected counter, dash into your
+    // own trail) is not a kill: no kill count, XP, level-ups or heal-on-kill.
+    // playerIds.has: only credit someone who is still in THIS room (see _purgeOwnedBy).
+    const killer = killerId === player.id || !this.playerIds.has(killerId) ? null : this.server.players.get(killerId);
     if (killer) {
       killer.kills++;
       // Vampiric: Crimson Hunger — burst heal on kill
-      if (killer.class === 'dark' && killer.unlockedNodes.has('crimson_hunger')) {
+      if (killer.isAlive && killer.class === 'dark' && killer.unlockedNodes.has('crimson_hunger')) {
         killer.health = Math.min(killer.maxHealth, killer.health + 40);
       }
       // Vampiric: Crimson Veil — brief incoming-damage reduction after a kill
@@ -774,7 +1036,7 @@ export class Room {
     this.server.broadcast(this.id, {
       type: S2C.PLAYER_DIED,
       playerId: player.id,
-      killerId: killerId ?? null,
+      killerId: killer ? killerId : null,
       killerName: killer?.username ?? null,
       killerSymbol: killer ? classSymbol(killer.class, killer.divergedBranch) : null,
       victimName: player.username,
@@ -957,24 +1219,26 @@ export class Room {
     player.velocity.z += (dz / dist) * pull;
   }
 
+  /**
+   * One lag-compensation frame. LagCompensation.rayCast only ever reads
+   * position / isAlive / level, so that is all that is kept -- this used to
+   * deep-copy every player's velocity, health, effect Map AND every live
+   * projectile 64 times a second, then retain 32 of those frames, which was
+   * the biggest source of per-tick garbage in the room.
+   */
   _snapshotState() {
     const players = {};
     for (const pid of this.playerIds) {
       const p = this.server.players.get(pid);
-      if (p) players[pid] = {
-        position: { ...p.position },
-        velocity: { ...p.velocity },
-        health: p.health,
-        isAlive: p.isAlive,
-        level: p.level,
-        activeEffects: new Map(p.activeEffects),
-      };
+      if (p) {
+        players[pid] = {
+          position: { x: p.position.x, y: p.position.y, z: p.position.z },
+          isAlive: p.isAlive,
+          level: p.level,
+        };
+      }
     }
-    const projectiles = {};
-    for (const [id, proj] of this.projectiles) {
-      projectiles[id] = { ...proj, position: { ...proj.position }, velocity: { ...proj.velocity } };
-    }
-    return { players, projectiles };
+    return { players };
   }
 
   _serializePlayers() {
@@ -989,6 +1253,31 @@ export class Room {
   _serializeProjectiles() {
     const out = {};
     for (const [id, p] of this.projectiles) out[id] = p;
+    return out;
+  }
+
+  /**
+   * Projectiles for GAME_TICK: the first tick a projectile exists it goes out
+   * in full (static fields: spellId, damage, radius, status, timestamps...);
+   * afterwards only the fields the sim mutates (position, velocity, and
+   * ownerId when a reflect flipped it). The client merges by id.
+   */
+  _serializeProjectilesDelta() {
+    const out = {};
+    for (const [id, p] of this.projectiles) {
+      const sentOwner = this._projWire.get(p);
+      const position = { x: r3(p.position.x), y: r3(p.position.y), z: r3(p.position.z) };
+      const velocity = { x: r2(p.velocity.x), y: r2(p.velocity.y), z: r2(p.velocity.z) };
+      if (sentOwner === undefined) {
+        out[id] = { ...p, position, velocity };
+        this._projWire.set(p, p.ownerId);
+      } else if (sentOwner !== p.ownerId) {
+        out[id] = { position, velocity, ownerId: p.ownerId };
+        this._projWire.set(p, p.ownerId);
+      } else {
+        out[id] = { position, velocity };
+      }
+    }
     return out;
   }
 
@@ -1020,29 +1309,72 @@ export class Room {
     return circles;
   }
 
+  /**
+   * Per-tick delta payload. Wire format (S2C.GAME_TICK, `delta: true`):
+   *   players[pid]  hot fields for every player (position, yaw, pitch, velocity,
+   *                 health, mana, isAlive, activeSlot, activeEffects, the
+   *                 active-slot cooldown, and the isChoosingBranch /
+   *                 defensiveActive / parryActive flags when true) PLUS any
+   *                 cold-shared fields (id, username, class, team, loadout,
+   *                 level, kills, elo, ping, bot settings...) that changed
+   *                 since they were last sent. The client MERGES this into its
+   *                 existing player object instead of replacing it.
+   *   self          owner-only: full cooldowns plus any changed progression
+   *                 (skillPoints, xp, divergedBranch, unlockedNodes,
+   *                 revealedLore). Spliced in per recipient; merged into
+   *                 players[<own id>] by the client.
+   * ROOM_STATE / PLAYER_JOINED still carry full serialize() objects (no
+   * `delta` flag => replace), and a (re)joining player's wire cache is reset
+   * so its cold fields go out to everyone on the next tick.
+   * Every recipient needs a different ackSeq and `self`, but the rest of the
+   * payload is identical -- stringify the shared part once and splice the
+   * per-recipient tail on via string concat.
+   */
   _broadcastTick(now) {
-    // Every recipient needs a different ackSeq spliced in, but the rest of the
-    // payload is identical -- serialize the shared part once (this already
-    // scales with player+bot count via the per-player serialize() calls
-    // below) and append ackSeq per-recipient via string concat instead of
-    // parsing and re-stringifying the whole payload for every connection.
+    const t0 = NET_STATS ? process.hrtime.bigint() : 0n;
+    const players = {};
+    for (const pid of this.playerIds) {
+      const p = this.server.players.get(pid);
+      if (!p) continue;
+      const hot = p.serializeHot();
+      const cd = p.cooldownsForWire(false);
+      for (const _ in cd) { hot.cooldowns = cd; break; }
+      const cold = p.coldDelta();
+      players[pid] = cold ? Object.assign(hot, cold) : hot;
+    }
     const base = JSON.stringify({
       type: S2C.GAME_TICK,
+      delta: true,
       tick: this.tick,
       timestamp: now,
-      players: this._serializePlayers(),
-      projectiles: this._serializeProjectiles(),
+      players,
+      projectiles: this._serializeProjectilesDelta(),
       effects: this._serializeEffects(),
       domains: this._serializeDomains(),
       barriers: this._serializeBarriers(),
     });
     const prefix = base.slice(0, -1); // drop trailing '}'
+    if (NET_STATS) {
+      _netStat.ns += Number(process.hrtime.bigint() - t0);
+      _netStat.n++;
+      _netStat.bytes += base.length;
+    }
 
     for (const pid of this.playerIds) {
       const p = this.server.players.get(pid);
       if (p && p.isConnected()) {
-        p.ws.send(`${prefix},"ackSeq":${p.lastInputSeq}}`);
+        const self = p.ownerDelta() ?? {};
+        self.cooldowns = p.cooldownsForWire(true);
+        const t1 = NET_STATS ? process.hrtime.bigint() : 0n;
+        const tail = `,"self":${JSON.stringify(self)},"ackSeq":${p.lastInputSeq}}`;
+        if (NET_STATS) _netStat.ns += Number(process.hrtime.bigint() - t1);
+        p.ws.send(prefix + tail);
+        if (NET_STATS) _netStat.bytes += tail.length - 1;
       }
+    }
+    if (NET_STATS && _netStat.n >= 320) {
+      console.error(`[netstats] room=${this.id} serialize+stringify avg ${(_netStat.ns / _netStat.n / 1e6).toFixed(3)} ms/tick, ${Math.round(_netStat.bytes / _netStat.n)} B/tick shared part`);
+      _netStat.ns = 0; _netStat.n = 0; _netStat.bytes = 0;
     }
   }
 }

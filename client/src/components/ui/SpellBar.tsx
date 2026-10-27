@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react';
+import { shallow } from 'zustand/shallow';
 import { useGameStore } from '../../stores/gameStore';
 import { getSpell, MOBILITY_SPELL, DEFENSIVE_SPELL, MAX_SPELL_SLOTS, isEquippableSpell } from 'shared/spells';
 import { SpellCard } from './SpellCard';
@@ -7,7 +8,15 @@ import { SpellCard } from './SpellCard';
 const MAX_BAR_WIDTH_FRACTION = 0.94;
 
 export function SpellBar() {
-  const { local, setActiveSlot } = useGameStore();
+  // Field-level selectors (arrays/maps compared shallowly -- applyTick swaps in
+  // fresh ones every sync) instead of subscribing to the whole store.
+  const localClass = useGameStore((s) => s.local.class);
+  const cooldowns = useGameStore((s) => s.local.cooldowns, shallow);
+  const unlockedNodes = useGameStore((s) => s.local.unlockedNodes, shallow);
+  const equippedSpells = useGameStore((s) => s.local.equippedSpells, shallow);
+  const activeSlot = useGameStore((s) => s.local.activeSlot);
+  const setActiveSlot = useGameStore((s) => s.setActiveSlot);
+  const local = { class: localClass, cooldowns, unlockedNodes, equippedSpells, activeSlot };
 
   const mobilitySpellId = local.class ? MOBILITY_SPELL[local.class] : null;
   const mobilitySpell = mobilitySpellId ? getSpell(mobilitySpellId) : null;

@@ -8,7 +8,8 @@ import { WebSocketClient } from './networking/WebSocketClient';
 import { ClockSync } from './networking/ClockSync';
 import { ClientPrediction } from './networking/ClientPrediction';
 import { EntityInterpolation } from './networking/EntityInterpolation';
-import { useGameStore, type MatchResultPlayer } from './stores/gameStore';
+import { netDebug } from './networking/netDebug';
+import { useGameStore, expandTickPayload, type MatchResultPlayer } from './stores/gameStore';
 import { useNetworkStore } from './stores/networkStore';
 import { Scene } from './components/core/Scene';
 import { HUD } from './components/ui/HUD';
@@ -28,7 +29,7 @@ import { audioManager } from './audio/AudioManager';
 import { getSpell } from 'shared/spells';
 import { S2C, C2S } from 'shared/events';
 import { RANKS } from 'shared/leveling';
-import type { GameTickPayload, WizardClass } from './types/game.types';
+import type { GameTickPayload, PlayerState, ProjectileState, WizardClass } from './types/game.types';
 import { IS_LOCALHOST } from './utils/isLocalhost';
 import { getOrCreateClientId } from './utils/clientId';
 
@@ -36,6 +37,19 @@ import { getOrCreateClientId } from './utils/clientId';
 // the server's 64Hz tick rate -- see the GAME_TICK handler below for why.
 const REACT_SYNC_HZ = 20;
 const REACT_SYNC_INTERVAL_MS = 1000 / REACT_SYNC_HZ;
+
+/**
+ * Folds a delta tick's partial entries into `backlog` (keyed by id, merged
+ * field by field) and drops backlog entries that left the world.
+ */
+function accumulate<T extends object>(backlog: Record<string, T>, incoming: Record<string, T>) {
+  for (const id in backlog) if (!(id in incoming)) delete backlog[id];
+  for (const id in incoming) {
+    const cur = backlog[id];
+    if (cur) Object.assign(cur, incoming[id]);
+    else backlog[id] = { ...incoming[id] };
+  }
+}
 
 const WS_BASE_URL = import.meta.env.VITE_WS_URL ?? 'ws://localhost:8080';
 // Stable per-browser id sent on connect so the server can restore a
@@ -67,6 +81,12 @@ export default function App() {
   const prediction = useRef(new ClientPrediction());
   const interpolation = useRef(new EntityInterpolation());
   const lastReactSyncRef = useRef(0);
+  // Delta-tick partials accumulated since the last React sync, see the GAME_TICK handler.
+  const pendingTick = useRef<{ players: Record<string, PlayerState>; projectiles: Record<string, ProjectileState> } | null>(null);
+  // Set when the socket drops mid-lobby-game, consumed by the next ROOM_JOINED
+  // (the fresh connection lands on the main menu with no room) to drop the
+  // player straight back into the arena with the class they had.
+  const rejoinRef = useRef<{ cls: WizardClass; username: string } | null>(null);
 
   const [showPauseMenu, setShowPauseMenu] = useState(false);
   // Which pause menu tab is showing -- lifted up here (rather than owned
@@ -80,10 +100,16 @@ export default function App() {
   const [pendingMode, setPendingMode] = useState<string | null>(null);
   const [pendingOpponentId, setPendingOpponentId] = useState<string | null>(null);
 
+  // Mirror of "a lab overlay is open" for the long-lived keydown listener below (its effect has no deps).
+  const labOpenRef = useRef(false);
+  useEffect(() => { labOpenRef.current = showExperimentLab || showDesignLab; }, [showExperimentLab, showDesignLab]);
+
   // Must be declared before the useEffect that depends on it
   const phase = useGameStore((s) => s.phase);
 
   const voteState = useGameStore((s) => s.voteState);
+  const connected = useNetworkStore((s) => s.connected);
+  const replaced = useNetworkStore((s) => s.replaced);
 
   // Keep the store flag in sync so CameraController can block inputs. Only
   // the once-per-life fork vote blocks -- the player is hidden and frozen
@@ -96,6 +122,16 @@ export default function App() {
     const blocking = showPauseMenu || showExperimentLab || showDesignLab || menuPhase || voteState?.blocking === true;
     useGameStore.getState().setMenuOpen(blocking);
   }, [showPauseMenu, showExperimentLab, showDesignLab, phase, voteState]);
+
+  // Back at the main menu means no room (see MatchEndScreen/LEAVE_ROOM), so no more
+  // ticks will refresh local.isAlive. After a VICTORY it would still read `true`, and
+  // CameraController only snaps the camera to the spawn point on a false -> true
+  // isAlive transition -- so the next match would start with the camera (and the
+  // predicted position) left at the old arena coordinates until reconciliation
+  // dragged it over. Clearing it here makes the next PLAYER_RESPAWNED a real transition.
+  useEffect(() => {
+    if (phase === 'main_menu') useGameStore.getState().setLocalAlive(false);
+  }, [phase]);
 
   // Music bed: pause menu wins over everything, then the menu flow, then the
   // death sting (on the death screen and a DEFEATED match end). The sting is
@@ -134,6 +170,25 @@ export default function App() {
   useEffect(() => {
     const wsClient = ws.current;
     wsClient.connect();
+    // Dev-only handle for automated playtests (scripts/playtest/browser-playtest.mjs).
+    if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__ws = wsClient;
+
+    // A fresh socket is a fresh timeline: the old in-flight input history,
+    // interpolation buffers and clock baseline all belong to a server session
+    // that no longer exists (the new connection is a new Player, not resumed
+    // mid-sim), and replaying/interpolating against them produces garbage.
+    const offOpen = wsClient.onOpen((isReconnect) => {
+      if (!isReconnect) return;
+      prediction.current.reset();
+      interpolation.current.clear();
+    });
+    const offClose = wsClient.onClose(() => {
+      prediction.current.reset();
+      const { phase: p, local } = useGameStore.getState();
+      if ((p === 'playing' || p === 'dead') && local.class && useNetworkStore.getState().roomId === 'lobby') {
+        rejoinRef.current = { cls: local.class, username: local.username };
+      }
+    });
 
     // ── Server messages ───────────────────────────────────────────────────
 
@@ -142,6 +197,35 @@ export default function App() {
       const restoredClass = msg.class as WizardClass | null;
       const restoredUsername = msg.username as string | null;
       setLocalPlayerId(playerId);
+
+      // ROOM_JOINED is also what a RECONNECT greets us with (the server tore down
+      // our old Player when the socket dropped, so whatever match/room we were in
+      // is gone and we're a fresh, room-less Player). Drop every piece of
+      // in-game client state tied to the old session before landing on the menu,
+      // otherwise the old arena's players/projectiles keep rendering behind the
+      // menu, the pause menu / labs stay open on top of it, a pending fork-vote
+      // keeps menuOpen latched, and matchActive makes the next death screen think
+      // it's still inside the vanished match.
+      if (useGameStore.getState().phase !== 'connecting') {
+        setShowPauseMenu(false);
+        setShowExperimentLab(false);
+        setShowDesignLab(false);
+        setPendingMode(null);
+        setPendingOpponentId(null);
+        setVoteState(null);
+        setMatchActive(false);
+        setMatchResult(null);
+        setMatchCountdownEndsAt(null);
+        setLocalAlive(false);
+        useGameStore.setState({
+          players: {}, projectiles: {}, effects: {}, domains: {}, barriers: {},
+          chargingSpell: null, serverCorrectedPos: null, spawnYaw: null, lastDeath: null,
+          // Debug mode is per server-side Player; the fresh one made by the reconnect starts with it off.
+          debugMode: false, birdsEyeView: false,
+        });
+        interpolation.current.prune(new Set());
+        if (document.pointerLockElement) document.exitPointerLock();
+      }
 
       // Land on the main menu first regardless of session state -- neither
       // branch here joins a room or picks a class anymore, that's deferred
@@ -152,6 +236,17 @@ export default function App() {
       if (restoredClass) setRestoredClass(restoredClass);
       if (restoredUsername) setRestoredUsername(restoredUsername);
       if (typeof msg.elo === 'number') setElo(msg.elo);
+
+      // Reconnected mid-game: rejoin the lobby rather than dumping the player
+      // on the main menu. A restored session (Redis) keeps its class/progress
+      // and respawns on JOIN_ROOM; otherwise pick the previous class again.
+      const rejoin = rejoinRef.current;
+      if (rejoin) {
+        rejoinRef.current = null;
+        wsClient.send(C2S.JOIN_ROOM, { roomId: 'lobby', username: rejoin.username || restoredUsername || `Wizard_${playerId.slice(0, 4)}` });
+        if (!restoredClass) wsClient.send(C2S.SELECT_CLASS, { class: rejoin.cls, username: rejoin.username || undefined });
+        return;
+      }
       setPhase('main_menu');
     });
 
@@ -175,24 +270,30 @@ export default function App() {
     const offRoomState = wsClient.on(S2C.ROOM_STATE, (msg) => {
       const payload = msg as unknown as GameTickPayload;
       const localId = useNetworkStore.getState().localPlayerId ?? '';
-      applyTick(payload.players, payload.projectiles, payload.effects, payload.domains, payload.barriers, payload.tick, payload.timestamp, localId);
+      // ROOM_STATE is a full snapshot: replace, and drop any delta backlog.
+      pendingTick.current = null;
+      applyTick(payload.players, payload.projectiles, payload.effects, payload.domains, payload.barriers, payload.tick, payload.timestamp, localId, false);
       setRoomId(msg.roomId as string);
     });
 
     const offTick = wsClient.on(S2C.GAME_TICK, (msg) => {
       const payload = msg as unknown as GameTickPayload;
       const localId = useNetworkStore.getState().localPlayerId ?? '';
+      expandTickPayload(payload, localId);
 
       // Reconcile client prediction and push corrected position for CameraController to blend
       const serverPlayer = payload.players[localId];
       if (serverPlayer) {
-        const vel = { x: 0, y: 0, z: 0 };
         const barrierCircles = Object.values(payload.barriers ?? {})
           .filter((b) => b.active)
           .map((b) => ({ x: b.position.x, z: b.position.z, radius: b.width / 2 }));
-        const corrected = prediction.current.reconcile(serverPlayer.position, payload.ackSeq, vel, barrierCircles);
-        useGameStore.setState({ serverCorrectedPos: corrected });
+        // Replay the unacked inputs from the server's own velocity (falls back
+        // to our recorded post-ack velocity when the server doesn't send it);
+        // CameraController picks the result up once per frame.
+        prediction.current.reconcile(serverPlayer.position, payload.ackSeq, serverPlayer.velocity, barrierCircles);
       }
+      netDebug.onTick();
+      interpolation.current.onTick(payload.timestamp);
 
       // Feed remote players into interpolation -- every tick (64Hz), independent
       // of the throttled React sync below, so remote-entity motion stays smooth.
@@ -214,10 +315,28 @@ export default function App() {
       // precision reads from here: own position is local-predicted, remote
       // players come from the interpolation buffer above, and projectiles
       // integrate their own velocity per frame.
+      //
+      // Delta payloads carry cold player fields and projectile statics only
+      // on the tick they change, so ticks skipped by this throttle must not
+      // lose them: fold every tick's partials into a backlog and hand the
+      // accumulated result to applyTick at sync time.
+      if (payload.delta) {
+        const pending = pendingTick.current ?? (pendingTick.current = { players: {}, projectiles: {} });
+        accumulate(pending.players, payload.players);
+        accumulate(pending.projectiles, payload.projectiles);
+      } else {
+        pendingTick.current = null;
+      }
       const now = performance.now();
       if (now - lastReactSyncRef.current >= REACT_SYNC_INTERVAL_MS) {
         lastReactSyncRef.current = now;
-        applyTick(payload.players, payload.projectiles, payload.effects, payload.domains, payload.barriers, payload.tick, payload.timestamp, localId);
+        const pending = pendingTick.current;
+        pendingTick.current = null;
+        applyTick(
+          pending ? pending.players : payload.players,
+          pending ? pending.projectiles : payload.projectiles,
+          payload.effects, payload.domains, payload.barriers, payload.tick, payload.timestamp, localId, !!pending,
+        );
       }
     });
 
@@ -314,6 +433,7 @@ export default function App() {
       if (msg.playerId === localId) {
         // Sync camera to actual spawn position before prediction takes over
         if (msg.position) setLocalPosition(msg.position as { x: number; y: number; z: number });
+        prediction.current.reset(); // pre-respawn inputs describe a body that no longer exists
         // Match spawns pick a facing (toward the opponent/arena center --
         // see Room.setupMatch/setupDuel) instead of leaving the camera
         // pointed wherever it last happened to look; consumed by CameraController.
@@ -329,6 +449,14 @@ export default function App() {
     // tab was last showing.
     const onKeyDown = (e: KeyboardEvent) => {
       const p = useGameStore.getState().phase;
+      // A lab overlay (z-index above the pause menu) owns the keyboard while it's open:
+      // Escape closes it, and neither key may queue a pause menu up underneath it
+      // (which then popped into view the moment the lab closed).
+      if (labOpenRef.current) {
+        if (e.code === 'Escape') { setShowExperimentLab(false); setShowDesignLab(false); }
+        if (e.code === 'Tab') e.preventDefault();
+        return;
+      }
       if (e.code === 'Tab') {
         e.preventDefault();
         if (p === 'playing' || p === 'dead') {
@@ -350,7 +478,7 @@ export default function App() {
     // keydown handler above never fires on the first press. Instead, listen for
     // the lock-release event and open the menu directly.
     const onPointerLockChange = () => {
-      if (!document.pointerLockElement) {
+      if (!document.pointerLockElement && !labOpenRef.current) {
         const p = useGameStore.getState().phase;
         // The fork-choice screen (SkillVotePrompt) deliberately releases
         // pointer lock itself when it opens so the cursor is visible to
@@ -372,6 +500,8 @@ export default function App() {
     }, 16);
 
     return () => {
+      offOpen();
+      offClose();
       offJoined();
       offMatchCountdown();
       offMatchEnd();
@@ -477,6 +607,18 @@ export default function App() {
       {/* Class selection (blocks scene interaction until chosen) */}
       {phase === 'class_select' && (
         <ClassSelect ws={ws.current} onSelected={onClassSelected} pendingMode={pendingMode} pendingOpponentId={pendingOpponentId} />
+      )}
+
+      {/* Mid-session connection loss: the socket auto-reconnects (see WebSocketClient),
+          but until it does the world silently freezes -- say so. Non-blocking. */}
+      {!connected && phase !== 'connecting' && (
+        <div style={{
+          position: 'fixed', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 900,
+          padding: '6px 18px', background: 'rgba(120,20,20,0.85)', border: '1px solid #cc4444',
+          color: '#ffdddd', fontSize: 12, letterSpacing: 3, textTransform: 'uppercase', pointerEvents: 'none',
+        }}>
+          {replaced ? 'Opened in another tab - reload to play here' : 'Connection lost - reconnecting...'}
+        </div>
       )}
 
       {/* Connecting overlay */}

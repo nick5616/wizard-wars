@@ -14,7 +14,7 @@
  */
 
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { SpellDef, SpellType, WizardClass } from '../../types/game.types';
 
@@ -457,17 +457,33 @@ interface BattleSceneProps {
   myClass: WizardClass | null;
   hoveredSpell: SpellDef | null;
   idleGemColor: string;
+  /** Cap the redraw rate (ambient backdrops don't need 60Hz). Omit for the full rAF loop. */
+  maxFps?: number;
 }
 
-export function BattleScene({ myClass, hoveredSpell, idleGemColor }: BattleSceneProps) {
+/** Drives a `frameloop="demand"` canvas at a fixed rate, and idles while the tab is hidden. */
+function FpsLimiter({ fps }: { fps: number }) {
+  const invalidate = useThree((s) => s.invalidate);
+  useEffect(() => {
+    const id = setInterval(() => { if (!document.hidden) invalidate(); }, 1000 / fps);
+    return () => clearInterval(id);
+  }, [fps, invalidate]);
+  return null;
+}
+
+export function BattleScene({ myClass, hoveredSpell, idleGemColor, maxFps }: BattleSceneProps) {
   if (!myClass) return null;
   return (
     <Canvas
       camera={{ fov: 34, position: [-1.0, 2.5, 5.7] }}
-      gl={{ antialias: true }}
+      gl={{ antialias: true, powerPreference: 'high-performance' }}
+      // Preview panes never need more than 1.5x -- they're small or dimmed.
+      dpr={[1, 1.5]}
+      frameloop={maxFps ? 'demand' : 'always'}
       style={{ width: '100%', height: '100%' }}
       onCreated={({ camera }) => camera.lookAt(0.05, 1.25, -1.0)}
     >
+      {maxFps ? <FpsLimiter fps={maxFps} /> : null}
       <Suspense fallback={null}>
         <SceneInner myClass={myClass} hoveredSpell={hoveredSpell} idleGemColor={idleGemColor} />
       </Suspense>

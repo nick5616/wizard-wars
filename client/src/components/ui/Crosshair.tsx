@@ -48,10 +48,10 @@ function ChargeRing({ color, windupMs, startedAt }: { color: string; windupMs: n
 }
 
 export function Crosshair() {
-  const { local } = useGameStore();
+  const wizardClass = useGameStore((s) => s.local.class);
   const chargingSpell = useGameStore((s) => s.chargingSpell);
   const moveCurveDeg = useGameStore((s) => s.local.moveCurveDeg);
-  const color = CLASS_COLORS[local.class ?? ''] ?? '#ffffff';
+  const color = CLASS_COLORS[wizardClass ?? ''] ?? '#ffffff';
   const chargeColor = chargingSpell ? getSpell(chargingSpell.spellId)?.glowColor ?? color : color;
 
   // Learnable-tech readout for the movement-curve mechanic (see

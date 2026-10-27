@@ -8,6 +8,7 @@
  */
 
 import type { CSSProperties } from 'react';
+import { shallow } from 'zustand/shallow';
 import { useGameStore } from '../../stores/gameStore';
 import { classFlavor } from 'shared/classFlavor';
 import { xpProgress } from 'shared/leveling';
@@ -78,7 +79,14 @@ function Well({ size, pct, color, glow, label, value, style }: WellProps) {
 }
 
 export function StatusWells() {
-  const local = useGameStore((s) => s.local);
+  // Field-level pick, not `s.local`: applyTick rebuilds `local` every sync and
+  // tickLocalCooldowns writes it every frame, so subscribing to the whole
+  // object re-rendered this (always-on) HUD cluster constantly.
+  const local = useGameStore((s) => ({
+    xp: s.local.xp, class: s.local.class, divergedBranch: s.local.divergedBranch,
+    health: s.local.health, maxHealth: s.local.maxHealth,
+    mana: s.local.mana, maxMana: s.local.maxMana, username: s.local.username,
+  }), shallow);
   const { level, fraction } = xpProgress(local.xp);
   const flavor = local.class ? classFlavor(local.class, local.divergedBranch) : null;
 

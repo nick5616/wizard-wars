@@ -15,11 +15,12 @@ const RANGE = 20;
 export function TremorSense() {
   const hasTremorSense = useGameStore((s) => s.local.unlockedNodes.includes('tremor_sense'));
   const players = useGameStore((s) => s.players);
-  const localPos = useGameStore((s) => s.local.position);
+  // Only needed (and only worth re-rendering for) with the perk unlocked.
+  const localPos = useGameStore((s) => (s.local.unlockedNodes.includes('tremor_sense') ? s.local.position : null));
   const { localPlayerId } = useNetworkStore();
 
   const nearby = useMemo(() => {
-    if (!hasTremorSense) return [];
+    if (!hasTremorSense || !localPos) return [];
     return Object.values(players).filter((p) => {
       if (p.id === localPlayerId || !p.isAlive) return false;
       const dx = p.position.x - localPos.x, dz = p.position.z - localPos.z;

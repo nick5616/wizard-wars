@@ -24,6 +24,7 @@ import * as THREE from 'three';
 import type { EffectState } from '../../types/game.types';
 import { createRupeeGeometry } from '../../utils/rupeeGeometry';
 import { crystalShine } from '../../utils/crystalMaterial';
+import { usePooledLight } from '../core/LightPool';
 
 interface GemPlopSpellProps {
   effect: EffectState;
@@ -38,13 +39,14 @@ const RUPEE_HEIGHT = 0.85;
 export function GemPlopSpell({ effect }: GemPlopSpellProps) {
   const meshRef = useRef<THREE.Mesh>(null);
   const glowRef = useRef<THREE.Mesh>(null);
-  const lightRef = useRef<THREE.PointLight>(null);
 
   const baseX = effect.position?.x ?? 0;
   const baseY = (effect.position?.y ?? 0) + RUPEE_HEIGHT * 0.45;
   const baseZ = effect.position?.z ?? 0;
   const color = effect.color ?? '#39ff6a';
   const glowColor = effect.glowColor ?? '#baffd9';
+
+  const lightRef = usePooledLight({ color: glowColor, distance: 10, intensity: 10, position: { x: baseX, y: baseY, z: baseZ } });
 
   const scene = useMemo(() => {
     const geometry = createRupeeGeometry(0.4, RUPEE_HEIGHT);
@@ -86,7 +88,6 @@ export function GemPlopSpell({ effect }: GemPlopSpellProps) {
         <meshPhysicalMaterial {...crystalShine(color)} />
       </mesh>
       <mesh ref={glowRef} geometry={scene.glowGeo} material={scene.glowMat} position={[baseX, baseY, baseZ]} />
-      <pointLight ref={lightRef} position={[baseX, baseY, baseZ]} color={glowColor} intensity={10} distance={10} decay={2} />
     </>
   );
 }

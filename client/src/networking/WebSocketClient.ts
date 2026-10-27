@@ -4,6 +4,7 @@ import { ClockSync } from "./ClockSync";
 import { useNetworkStore } from "../stores/networkStore";
 
 const JITTER_SAMPLE_WINDOW = 30; // last N inter-tick gaps used to compute jitter
+const CLOCK_BURST_DELAYS_MS = [120, 240, 400, 700]; // extra clock pings right after connect
 
 type MessageHandler = (msg: Record<string, unknown>) => void;
 
@@ -18,6 +19,10 @@ export class WebSocketClient {
     private _generation = 0;
     private _lastTickArrival: number | null = null;
     private _tickGaps: number[] = [];
+    private _burstTimers: ReturnType<typeof setTimeout>[] = [];
+    private _openHandlers: Array<(isReconnect: boolean) => void> = [];
+    private _closeHandlers: Array<() => void> = [];
+    private _hasConnectedBefore = false;
 
     constructor(url: string, clockSync: ClockSync) {
         this.url = url;
@@ -41,7 +46,17 @@ export class WebSocketClient {
             console.log("[WS] Connected");
             useNetworkStore.getState().setConnected(true);
             this.reconnectDelay = 1000;
+            // New socket = new timeline: sequence/clock/jitter state from the
+            // old one would otherwise poison the first seconds after a reconnect.
+            const isReconnect = this._hasConnectedBefore;
+            this._hasConnectedBefore = true;
+            if (isReconnect) {
+                this.clockSync.reset();
+                this._lastTickArrival = null;
+                this._tickGaps = [];
+            }
             this._startClockSync();
+            for (const h of this._openHandlers) h(isReconnect);
         };
 
         this.ws.onmessage = (ev) => {
@@ -58,6 +73,14 @@ export class WebSocketClient {
             console.log(`[WS] Disconnected (code=${event.code}, reason="${event.reason}", wasClean=${event.wasClean})`);
             useNetworkStore.getState().setConnected(false);
             this._stopClockSync();
+            // 4001: another tab opened the same clientId and the server dropped us (see
+            // GameServer.onConnection). Reconnecting would just kick that tab back out.
+            if (event.code === 4001) {
+                this._destroyed = true;
+                useNetworkStore.getState().setReplaced(true);
+                return;
+            }
+            for (const h of this._closeHandlers) h();
             if (!this._destroyed) {
                 setTimeout(() => this.connect(), this.reconnectDelay);
                 this.reconnectDelay = Math.min(this.reconnectDelay * 2, 10000);
@@ -84,6 +107,18 @@ export class WebSocketClient {
     send(type: string, payload: Record<string, unknown> = {}) {
         if (this.ws?.readyState !== WebSocket.OPEN) return;
         this.ws.send(JSON.stringify({ type, ...payload }));
+    }
+
+    /** Fires on every socket open; `isReconnect` is false only for the very first one. */
+    onOpen(handler: (isReconnect: boolean) => void) {
+        this._openHandlers.push(handler);
+        return () => { this._openHandlers = this._openHandlers.filter((h) => h !== handler); };
+    }
+
+    /** Fires when an established socket drops (before the auto-reconnect is scheduled). */
+    onClose(handler: () => void) {
+        this._closeHandlers.push(handler);
+        return () => { this._closeHandlers = this._closeHandlers.filter((h) => h !== handler); };
     }
 
     on(type: string, handler: MessageHandler) {
@@ -139,7 +174,13 @@ export class WebSocketClient {
     }
 
     private _startClockSync() {
+        // A burst of pings right after connect so the clock is usable within
+        // ~0.5s instead of after the first 5s interval; the min-RTT pick in
+        // ClockSync then has several samples to choose from.
         this._sendClockSync();
+        for (const delay of CLOCK_BURST_DELAYS_MS) {
+            this._burstTimers.push(setTimeout(() => this._sendClockSync(), delay));
+        }
         this.clockSyncTimer = setInterval(
             () => this._sendClockSync(),
             CLOCK_SYNC_INTERVAL,
@@ -147,6 +188,8 @@ export class WebSocketClient {
     }
 
     private _stopClockSync() {
+        for (const t of this._burstTimers) clearTimeout(t);
+        this._burstTimers = [];
         if (this.clockSyncTimer) {
             clearInterval(this.clockSyncTimer);
             this.clockSyncTimer = null;

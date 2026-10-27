@@ -17,6 +17,7 @@ import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useGameStore } from '../../stores/gameStore';
+import { usePooledLight } from '../core/LightPool';
 import type { EffectState } from '../../types/game.types';
 
 const FLAME_COUNT = 18;
@@ -30,6 +31,9 @@ interface FlameSpec {
 export function AmaterasuSpell({ effect }: { effect: EffectState }) {
   const groupRef = useRef<THREE.Group>(null);
   const flameRefs = useRef<(THREE.Mesh | null)[]>([]);
+
+  // Dim red glow on the burning target -- pooled so it doesn't change the light count.
+  const lightRef = usePooledLight({ color: '#ff0022', distance: 4.5, intensity: 1.1 });
 
   const flames = useMemo<FlameSpec[]>(() => {
     const specs: FlameSpec[] = [];
@@ -56,6 +60,10 @@ export function AmaterasuSpell({ effect }: { effect: EffectState }) {
 
     groupRef.current.position.set(target.position.x, target.position.y, target.position.z);
     groupRef.current.visible = target.isAlive;
+    if (lightRef.current) {
+      lightRef.current.position.set(target.position.x, target.position.y - 0.8, target.position.z);
+      lightRef.current.intensity = target.isAlive ? 1.1 : 0;
+    }
 
     const now = Date.now();
     for (let i = 0; i < flameRefs.current.length; i++) {
@@ -90,7 +98,6 @@ export function AmaterasuSpell({ effect }: { effect: EffectState }) {
           </mesh>
         </group>
       ))}
-      <pointLight color="#ff0022" intensity={1.1} distance={4.5} decay={2} />
     </group>
   );
 }

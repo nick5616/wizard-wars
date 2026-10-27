@@ -1,4 +1,4 @@
-import { useRef, useEffect } from 'react';
+import { memo, useRef, useEffect } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { EntityInterpolation } from '../../networking/EntityInterpolation';
@@ -12,6 +12,7 @@ import { useCastAnimation } from '../../hooks/useCastAnimation';
 import { getSpell, DEFENSIVE_SPELL } from 'shared/spells';
 import { useGameStore } from '../../stores/gameStore';
 import { hatColorFor } from '../../utils/teamColor';
+import { netDebug } from '../../networking/netDebug';
 
 // Must mirror the private HAT_CONE_* / HAT_BASE_LOCAL_Y constants in
 // shared/leveling.js so the rendered hat lines up with where the server
@@ -28,6 +29,11 @@ function darken(hex: string, factor: number): string {
   const b = Math.round((n & 0xff) * factor);
   return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
 }
+
+// Faint self-glow standing in for the per-player <pointLight> this model used
+// to carry (0.5 intensity over 3 units): a light per wizard changed the scene's
+// light count on every join/leave and was re-evaluated by every lit fragment.
+const BODY_GLOW = 0.14;
 
 const CLASS_COLORS: Record<string, string> = {
   fire: '#ff4500',
@@ -46,7 +52,7 @@ interface RemotePlayerProps {
   initialState: PlayerState;
 }
 
-export function RemotePlayer({ playerId, interpolation, serverNow, initialState }: RemotePlayerProps) {
+function RemotePlayerImpl({ playerId, interpolation, serverNow, initialState }: RemotePlayerProps) {
   const groupRef = useRef<THREE.Group>(null);
   const healthBarRef = useRef<THREE.Mesh>(null);
 
@@ -55,8 +61,9 @@ export function RemotePlayer({ playerId, interpolation, serverNow, initialState 
   const hatScale = hatScaleForLevel(initialState.level ?? 1);
 
   // Team color on the hat only (body stays class-colored) -- see utils/teamColor.ts.
-  const players = useGameStore((s) => s.players);
-  const baseHatColor = hatColorFor(initialState.team, baseColor, players);
+  // Selector returns the resolved colour string, so this only re-renders when
+  // the team-colour answer actually changes, not on every tick's new players map.
+  const baseHatColor = useGameStore((s) => hatColorFor(initialState.team, baseColor, s.players));
   const hatColor = initialState.isBot ? darken(baseHatColor, 0.55) : baseHatColor;
   const castAnimRef = useCastAnimation(playerId);
 
@@ -75,7 +82,7 @@ export function RemotePlayer({ playerId, interpolation, serverNow, initialState 
   }, [playerId]);
 
   useFrame(() => {
-    const interp = interpolation.getInterpolated(playerId, serverNow());
+    const interp = interpolation.getInterpolated(playerId);
     if (!interp || !groupRef.current) return;
 
     if (!interp.isAlive || interp.isChoosingBranch) {
@@ -88,6 +95,7 @@ export function RemotePlayer({ playerId, interpolation, serverNow, initialState 
     // Subtract PLAYER_HEIGHT so the model's feet rest on the floor.
     groupRef.current.position.set(interp.position.x, interp.position.y - PLAYER_HEIGHT, interp.position.z);
     groupRef.current.rotation.y = interp.yaw;
+    netDebug.traceRemote(playerId, interp.position.x, interp.position.y, interp.position.z);
 
     // Health bar scale
     if (healthBarRef.current) {
@@ -101,7 +109,7 @@ export function RemotePlayer({ playerId, interpolation, serverNow, initialState 
       {/* Body capsule */}
       <mesh position={[0, 0.9, 0]} castShadow>
         <capsuleGeometry args={[0.35, 1.0, 4, 8]} />
-        <meshStandardMaterial color={color} roughness={0.7} metalness={0.1} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={BODY_GLOW} roughness={0.7} metalness={0.1} />
       </mesh>
 
       {/* Head */}
@@ -117,9 +125,6 @@ export function RemotePlayer({ playerId, interpolation, serverNow, initialState 
           <meshStandardMaterial color={hatColor} roughness={0.45} metalness={0.2} />
         </mesh>
       </group>
-
-      {/* Class glow */}
-      <pointLight position={[0, 1.5, 0]} intensity={0.5} distance={3} color={color} />
 
       {/* Defensive spell (Q) active -- plain translucent shell, no light */}
       {initialState.defensiveActive && defensiveGlow && (
@@ -167,3 +172,23 @@ export function RemotePlayer({ playerId, interpolation, serverNow, initialState 
     </group>
   );
 }
+
+// initialState is a brand-new object every 20Hz tick sync, which re-rendered
+// every wizard's whole mesh tree each time even though motion is driven
+// imperatively in useFrame. Only the fields the JSX below reads matter.
+function samePlayerProps(a: RemotePlayerProps, b: RemotePlayerProps): boolean {
+  if (a.playerId !== b.playerId || a.interpolation !== b.interpolation || a.serverNow !== b.serverNow) return false;
+  const x = a.initialState, y = b.initialState;
+  return x.class === y.class
+    && x.isBot === y.isBot
+    && x.level === y.level
+    && x.team === y.team
+    && x.maxHealth === y.maxHealth
+    && x.activeSlot === y.activeSlot
+    && x.equippedSpells?.[x.activeSlot ?? 0] === y.equippedSpells?.[y.activeSlot ?? 0]
+    && !!x.defensiveActive === !!y.defensiveActive
+    && !!x.parryActive === !!y.parryActive
+    && (x.phantomCasts ?? 0) === (y.phantomCasts ?? 0);
+}
+
+export const RemotePlayer = memo(RemotePlayerImpl, samePlayerProps);

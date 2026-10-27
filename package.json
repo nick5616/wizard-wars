@@ -7,7 +7,8 @@
     "dev:mock": "concurrently \"node scripts/mock-server.js\" \"npm run dev -w client\"",
     "dev:client": "npm run dev -w client",
     "start:server": "npm run start -w server",
-    "start:client": "npm run dev -w client"
+    "start:client": "npm run dev -w client",
+    "netsim": "node scripts/playtest/netsim-proxy.mjs"
   },
   "devDependencies": {
     "concurrently": "^8.2.0"

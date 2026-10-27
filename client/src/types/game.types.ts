@@ -69,6 +69,8 @@ export interface PlayerState {
   position: Vec3;
   yaw: number;
   pitch: number;
+  /** Rounded server velocity; absent from mock-server payloads. Used by reconciliation replay. */
+  velocity?: Vec3;
   equippedSpells: (string | null)[];
   activeSlot?: number;
   isChoosingBranch?: boolean;
@@ -164,6 +166,16 @@ export interface GameTickPayload {
   tick: number;
   timestamp: number;
   ackSeq: number;
+  /**
+   * True when `players`/`projectiles` entries are PARTIAL (hot fields every
+   * tick, cold fields only when changed, projectile statics only on the first
+   * tick) and must be merged into existing objects by id. Absent/false means
+   * full objects that replace (ROOM_STATE, scripts/mock-server.js).
+   * The typed maps below are the post-expansion shape (see expandTickPayload).
+   */
+  delta?: boolean;
+  /** Owner-only fields (cooldowns, progression); expandTickPayload folds them into players[localId]. */
+  self?: Partial<PlayerState>;
   players: Record<string, PlayerState>;
   projectiles: Record<string, ProjectileState>;
   effects: Record<string, EffectState>;

@@ -83,6 +83,7 @@ export class Player {
     this.clockOffset = 0; // estimated offset from NTP sync
     this.rtt = 100; // estimated round-trip time ms
     this.ping = 50;
+    this.isBot = false;
 
     // Parry state
     this.parryActive = false;
@@ -309,6 +310,78 @@ export class Player {
     return Date.now() - t < DEATH_NOTE_DAMAGE_WINDOW;
   }
 
+  // -- Wire format helpers (GAME_TICK) ----------------------------------------
+  // serialize() below is the full snapshot (ROOM_STATE / PLAYER_JOINED). Every
+  // 64Hz tick instead sends serializeHot() plus, only when something changed,
+  // the cold-shared fields (coldDelta) for everybody and the owner-only fields
+  // (ownerDelta) for the owning client alone. See Room._broadcastTick.
+
+  /** Fields that change (nearly) every tick, sent to every client. */
+  serializeHot() {
+    const effects = {};
+    for (const [k, v] of this.activeEffects) effects[k] = v;
+    const now = Date.now();
+    const hot = {
+      position: { x: r3(this.position.x), y: r3(this.position.y), z: r3(this.position.z) },
+      yaw: r4(this.yaw),
+      pitch: r4(this.pitch),
+      velocity: { x: r3(this.velocity.x), y: r3(this.velocity.y), z: r3(this.velocity.z) },
+      health: r2(this.health),
+      mana: Math.round(this.mana),
+      isAlive: this.isAlive,
+      activeSlot: this.activeSlot,
+    };
+    // Omitted while empty/false; the client treats "absent" as {} / false for
+    // these (see expandTickPayload in gameStore.ts).
+    for (const _ in effects) { hot.activeEffects = effects; break; }
+    if (this.isChoosingBranch) hot.isChoosingBranch = true;
+    if (this.defensiveActive && now < this.defensiveExpiry) hot.defensiveActive = true;
+    if (this.parryActive && now < this.parryExpiry) hot.parryActive = true;
+    return hot;
+  }
+
+  /**
+   * Remaining cooldowns in whole ms (only spells still cooling down; absent
+   * == ready). Remote players only get the active-slot spell's entry, which is
+   * all anyone else reads (SniperSightLines); the owner gets everything.
+   */
+  cooldownsForWire(ownerView) {
+    const now = Date.now();
+    const out = {};
+    if (ownerView) {
+      for (const [k, v] of this.cooldowns) {
+        const ms = v - now;
+        if (ms > 0) out[k] = Math.round(ms);
+      }
+    } else {
+      const spellId = this.equippedSpells[this.activeSlot ?? 0];
+      const until = spellId ? this.cooldowns.get(spellId) : undefined;
+      if (until !== undefined && until > now) out[spellId] = Math.round(until - now);
+    }
+    return out;
+  }
+
+  /** Identity/loadout fields every client needs, but only when they change (Bot adds its own). */
+  _coldSharedKeys() { return COLD_SHARED_KEYS; }
+
+  /** Fields of the cold-shared set that differ from what was last sent, or null. */
+  coldDelta() {
+    this._coldSent ??= {};
+    return diffKeys(this, this._coldSharedKeys(), this._coldSent);
+  }
+
+  /** Progression fields only the owning client reads, changed since last sent, or null. */
+  ownerDelta() {
+    this._ownerSent ??= {};
+    return diffKeys(this, COLD_OWNER_KEYS, this._ownerSent);
+  }
+
+  /** Forget what was sent so the next tick re-sends all cold fields (on (re)join). */
+  resetWireCache() {
+    this._coldSent = null;
+    this._ownerSent = null;
+  }
+
   serialize() {
     const effects = {};
     for (const [k, v] of this.activeEffects) effects[k] = v;
@@ -326,6 +399,7 @@ export class Player {
       mana: Math.round(this.mana),
       maxMana: this.maxMana,
       position: this.position,
+      velocity: { ...this.velocity }, // full snapshots (ROOM_STATE/PLAYER_JOINED) replace rather than merge, so they carry it too
       yaw: this.yaw,
       pitch: this.pitch,
       equippedSpells: this.equippedSpells,
@@ -348,4 +422,64 @@ export class Player {
       phantomCasts: this.phantomCasts,
     };
   }
+}
+
+const r2 = (v) => Math.round(v * 100) / 100;
+const r3 = (v) => Math.round(v * 1000) / 1000;
+const r4 = (v) => Math.round(v * 10000) / 10000;
+
+/** Wire-comparable copy of a value: Sets become arrays, arrays/objects are copied one level. */
+function snapshot(v) {
+  if (v instanceof Set) return [...v];
+  if (Array.isArray(v)) return [...v];
+  if (v && typeof v === 'object') return { ...v };
+  return v;
+}
+
+function sameValue(a, b) {
+  if (a === b) return true;
+  if (a == null || b == null || typeof a !== 'object' || typeof b !== 'object') return false;
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
+  const ka = Object.keys(a);
+  if (ka.length !== Object.keys(b).length) return false;
+  for (const k of ka) if (a[k] !== b[k]) return false;
+  return true;
+}
+
+function sameSet(arr, set) {
+  for (let i = 0; i < arr.length; i++) if (!set.has(arr[i])) return false;
+  return true;
+}
+
+export const COLD_SHARED_KEYS = [
+  'id', 'username', 'class', 'team', 'maxHealth', 'maxMana', 'equippedSpells',
+  'level', 'kills', 'elo', 'ping', 'isBot', 'phantomCasts',
+];
+const COLD_OWNER_KEYS = ['skillPoints', 'xp', 'divergedBranch', 'unlockedNodes', 'revealedLore'];
+
+/**
+ * Compares `src[key]` for each key against the last-sent snapshot `sent`
+ * (updated in place) and returns only the changed fields, or null if none
+ * changed. Sets are compared by membership without allocating when unchanged.
+ */
+function diffKeys(src, keys, sent) {
+  let out = null;
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i];
+    const v = src[k];
+    if (v instanceof Set) {
+      const prev = sent[k];
+      if (prev && prev.length === v.size && sameSet(prev, v)) continue;
+      sent[k] = [...v];
+      (out ??= {})[k] = sent[k];
+    } else if (!(k in sent) || !sameValue(v, sent[k])) {
+      sent[k] = snapshot(v);
+      (out ??= {})[k] = sent[k];
+    }
+  }
+  return out;
 }

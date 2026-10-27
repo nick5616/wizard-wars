@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useGameStore } from '../../stores/gameStore';
+import { useQualityStore, type QualitySetting } from '../../stores/qualityStore';
+import { useRenderGate } from '../../stores/renderGate';
 import { useNetworkStore } from '../../stores/networkStore';
 import { getSpell, MOBILITY_SPELL, DEFENSIVE_SPELL, MAX_SPELL_SLOTS, isEquippableSpell } from 'shared/spells';
 import { getTree, getForkPair } from 'shared/skillTrees';
@@ -175,6 +177,10 @@ export function PauseMenu({ ws, onClose, experimentLabAvailable, onOpenExperimen
   useEffect(() => {
     if (document.pointerLockElement) document.exitPointerLock();
   }, []);
+
+  // Fully opaque (#050508, inset 0): the arena behind it is invisible, so let
+  // the Scene stop rendering it while the menu is up.
+  useEffect(() => useRenderGate.getState().cover(), []);
 
   const wizardClass = local.class;
   const classColor = wizardClass ? CLASS_COLORS[wizardClass] : '#aaa';
@@ -977,6 +983,40 @@ function SettingRow({ label, value }: { label: string; value: string }) {
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #1a1a28' }}>
       <span style={{ color: '#ccc', fontSize: 12 }}>{label}</span>
       <span style={{ color: '#888', fontSize: 12 }}>{value}</span>
+    </div>
+  );
+}
+
+/** Graphics quality: Auto (adapts to frame rate) or a pinned Low / Medium / High. See stores/qualityStore.ts. */
+function QualityRow({ classColor }: { classColor: string }) {
+  const setting = useQualityStore((s) => s.setting);
+  const tier = useQualityStore((s) => s.tier);
+  const setSetting = useQualityStore((s) => s.setSetting);
+  const options: QualitySetting[] = ['auto', 'low', 'medium', 'high'];
+  return (
+    <div style={{ padding: '8px 0', borderBottom: '1px solid #1a1a28' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ color: '#ccc', fontSize: 12 }}>Graphics quality</span>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {options.map((o) => (
+            <UIButton
+              key={o}
+              onClick={() => setSetting(o)}
+              style={{
+                padding: '4px 10px', borderRadius: 3, cursor: 'pointer', fontSize: 10, letterSpacing: 1, textTransform: 'uppercase',
+                background: setting === o ? classColor + '33' : 'rgba(255,255,255,0.03)',
+                border: `1px solid ${setting === o ? classColor : '#333'}`,
+                color: setting === o ? classColor : '#aaa',
+              }}
+            >
+              {o}
+            </UIButton>
+          ))}
+        </div>
+      </div>
+      <div style={{ color: '#888', fontSize: 10, marginTop: 4 }}>
+        {setting === 'auto' ? `Adapts to your frame rate -- currently ${tier}.` : 'Pinned -- lower it if the game stutters.'}
+      </div>
     </div>
   );
 }
